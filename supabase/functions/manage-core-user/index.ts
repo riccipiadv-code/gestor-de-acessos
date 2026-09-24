@@ -414,24 +414,26 @@ Deno.serve(async (req: Request) => {
         throw insertUserErr || new Error('Falha ao inserir core_usuarios.')
       }
 
-      // Inserir acessos em core_usuario_sistemas com verificação estrita de erros
-      if (sanitizedSistemas.length > 0) {
-        const acessosRows = sanitizedSistemas.map((item) => ({
-          usuario_id: newUsuario.id,
-          sistema_id: item.sistema_id,
-          perfil_id: item.perfil_id,
-          ativo: true,
-        }))
+      // Atribuir acessos via RPC atômica public.core_atualizar_usuario_acessos
+      const acessosPayload = sanitizedSistemas.map((item) => ({
+        sistema_id: item.sistema_id,
+        perfil_id: item.perfil_id,
+      }))
 
-        const { error: insertAcessosErr } = await adminClient
-          .from('core_usuario_sistemas')
-          .insert(acessosRows)
+      const { error: rpcAcessosErr } = await adminClient.rpc('core_atualizar_usuario_acessos', {
+        p_usuario_id: newUsuario.id,
+        p_acessos: acessosPayload,
+      })
 
-        if (insertAcessosErr) {
-          // Reverter inserção do usuário caso os acessos falhem (segurança estrita)
-          await adminClient.from('core_usuarios').delete().eq('id', newUsuario.id)
-          throw new Error(`Falha ao atribuir acessos do usuário: ${insertAcessosErr.message}`)
-        }
+      if (rpcAcessosErr) {
+        // Reverter inserção do usuário caso a RPC falhe (não permitir usuário com acessos inconsistentes)
+        await adminClient.from('core_usuarios').delete().eq('id', newUsuario.id)
+        return new Response(
+          JSON.stringify({
+            error: `Falha ao atribuir acessos do usuário: ${rpcAcessosErr.message}`,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
       }
 
       return new Response(JSON.stringify({ success: true, usuario: newUsuario }), {
@@ -543,52 +545,7 @@ Deno.serve(async (req: Request) => {
         })
       }
 
-      // Atualizar acessos atomicamente com verificação estrita de erros
-      if (validatedSistemas !== undefined) {
-        // Guardar estado anterior para rollback defensivo caso ocorra erro no insert
-        const { data: previousAcessos, error: getPrevErr } = await adminClient
-          .from('core_usuario_sistemas')
-          .select('usuario_id, sistema_id, perfil_id, ativo')
-          .eq('usuario_id', id)
-
-        if (getPrevErr) {
-          throw new Error(`Falha ao verificar acessos anteriores: ${getPrevErr.message}`)
-        }
-
-        // Remover acessos existentes
-        const { error: deleteAcessosErr } = await adminClient
-          .from('core_usuario_sistemas')
-          .delete()
-          .eq('usuario_id', id)
-
-        if (deleteAcessosErr) {
-          throw new Error(`Falha ao remover acessos anteriores: ${deleteAcessosErr.message}`)
-        }
-
-        // Inserir os novos acessos validados previamente
-        if (validatedSistemas.length > 0) {
-          const rows = validatedSistemas.map((item) => ({
-            usuario_id: id,
-            sistema_id: item.sistema_id,
-            perfil_id: item.perfil_id,
-            ativo: true,
-          }))
-
-          const { error: insertAcessosErr } = await adminClient
-            .from('core_usuario_sistemas')
-            .insert(rows)
-
-          if (insertAcessosErr) {
-            // Tentativa de rollback para restaurar acessos anteriores em caso de falha
-            if (previousAcessos && previousAcessos.length > 0) {
-              await adminClient.from('core_usuario_sistemas').insert(previousAcessos)
-            }
-            throw new Error(`Falha ao inserir novos acessos: ${insertAcessosErr.message}`)
-          }
-        }
-      }
-
-      // Atualizar core_usuarios
+      // Atualizar core_usuarios primeiro (mantém dados cadastrais atualizados antes de ajustar acessos)
       const { data: updatedUser, error: updateErr } = await adminClient
         .from('core_usuarios')
         .update({
@@ -602,6 +559,29 @@ Deno.serve(async (req: Request) => {
         .single()
 
       if (updateErr) throw updateErr
+
+      // Atualizar acessos atomicamente via RPC pública core_atualizar_usuario_acessos
+      // A RPC é a única responsável pela substituição dos acessos (remove existentes e insere novos em uma só transação).
+      if (validatedSistemas !== undefined) {
+        const acessosPayload = validatedSistemas.map((item) => ({
+          sistema_id: item.sistema_id,
+          perfil_id: item.perfil_id,
+        }))
+
+        const { error: rpcAcessosErr } = await adminClient.rpc('core_atualizar_usuario_acessos', {
+          p_usuario_id: id,
+          p_acessos: acessosPayload,
+        })
+
+        if (rpcAcessosErr) {
+          return new Response(
+            JSON.stringify({
+              error: `Falha ao atualizar acessos do usuário: ${rpcAcessosErr.message}`,
+            }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          )
+        }
+      }
 
       return new Response(JSON.stringify({ success: true, usuario: updatedUser }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
