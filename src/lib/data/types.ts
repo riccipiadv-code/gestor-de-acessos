@@ -1,5 +1,5 @@
 // Tipos TypeScript correspondentes às tabelas centrais core_* do Supabase
-// Não inventar tabelas, não referenciar profiles ou sistemas antigos.
+// Modelos de dados do Gestor de Acesso Ricci.
 
 export interface CoreUsuario {
   id: string

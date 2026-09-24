@@ -60,7 +60,7 @@ Deno.serve(async (req: Request) => {
     // Validação estrita da cadeia de administrador:
     // 1. core_usuarios pelo auth_user_id
     // 2. core_usuarios.ativo = true
-    // 3. RPC core_is_gestor_acesso_admin() = true
+    // 3. Administrador ativo no sistema GESTOR_ACESSO com perfil ADMINISTRADOR
     const { data: requesterCoreUser, error: coreUserError } = await adminClient
       .from('core_usuarios')
       .select('id, nome, email, ativo')
@@ -116,6 +116,182 @@ Deno.serve(async (req: Request) => {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
+    }
+
+    // =========================================================================
+    // HELPER: Validação prévia completa dos pares sistema/perfil
+    // Se houver qualquer par inválido, retorna erro sem tocar no banco
+    // =========================================================================
+    async function validateSistemasPairs(
+      sistemasInput: unknown,
+    ): Promise<{ valid: boolean; error?: string; rows?: SistemaInput[] }> {
+      if (!Array.isArray(sistemasInput)) {
+        return { valid: true, rows: [] }
+      }
+
+      // Buscar todos os sistemas e perfis ativos para validação em memória consistente
+      const { data: allSistemas, error: sErr } = await adminClient
+        .from('core_sistemas')
+        .select('id, codigo, nome, ativo')
+
+      if (sErr || !allSistemas) {
+        return { valid: false, error: 'Falha ao consultar catálogo de sistemas corporativos.' }
+      }
+
+      const { data: allPerfis, error: pErr } = await adminClient
+        .from('core_perfis')
+        .select('id, sistema_id, codigo, nome, ativo')
+
+      if (pErr || !allPerfis) {
+        return { valid: false, error: 'Falha ao consultar catálogo de perfis corporativos.' }
+      }
+
+      const sistemasMap = new Map(allSistemas.map((s) => [s.id, s]))
+      const perfisMap = new Map(allPerfis.map((p) => [p.id, p]))
+
+      const validatedList: SistemaInput[] = []
+      const seenSistemas = new Set<string>()
+
+      for (let i = 0; i < sistemasInput.length; i++) {
+        const item = sistemasInput[i]
+        if (!item || typeof item !== 'object') {
+          return {
+            valid: false,
+            error: `Item de acesso no índice ${i} está com formato inválido.`,
+          }
+        }
+
+        const sistema_id = item.sistema_id
+        const perfil_id = item.perfil_id
+
+        if (!sistema_id || !perfil_id) {
+          return {
+            valid: false,
+            error: `Item de acesso no índice ${i} requer ambos sistema_id e perfil_id.`,
+          }
+        }
+
+        if (seenSistemas.has(sistema_id)) {
+          return {
+            valid: false,
+            error: `Sistema duplicado na lista de acessos (id: ${sistema_id}). Cada sistema só pode ter um perfil atribuído.`,
+          }
+        }
+        seenSistemas.add(sistema_id)
+
+        const sistema = sistemasMap.get(sistema_id)
+        if (!sistema) {
+          return {
+            valid: false,
+            error: `Sistema ${sistema_id} não existe no catálogo de sistemas corporativos.`,
+          }
+        }
+
+        const perfil = perfisMap.get(perfil_id)
+        if (!perfil) {
+          return {
+            valid: false,
+            error: `Perfil ${perfil_id} não existe no catálogo de perfis corporativos.`,
+          }
+        }
+
+        if (perfil.sistema_id !== sistema_id) {
+          return {
+            valid: false,
+            error: `Incoerência de acesso: o perfil "${perfil.nome}" não pertence ao sistema "${sistema.nome}".`,
+          }
+        }
+
+        validatedList.push({ sistema_id, perfil_id })
+      }
+
+      return { valid: true, rows: validatedList }
+    }
+
+    // =========================================================================
+    // HELPER: Validação de segurança para garantir ao menos 1 Administrador ativo
+    // no sistema GESTOR_ACESSO com perfil ADMINISTRADOR.
+    // Impede que qualquer operação deixe o Gestor de Acessos sem admin.
+    // =========================================================================
+    async function willKeepAtLeastOneGestorAcessoAdmin(
+      targetUserId: string,
+      prospectiveUserActive: boolean,
+      prospectiveSistemas?: SistemaInput[],
+    ): Promise<{ safe: boolean; error?: string }> {
+      // 1. Busca todos os administradores ativos atuais do Gestor de Acesso
+      const { data: currentAdmins, error: adminQueryErr } = await adminClient
+        .from('core_usuario_sistemas')
+        .select(`
+          id,
+          usuario_id,
+          ativo,
+          core_usuarios!inner(id, ativo, email),
+          core_sistemas!inner(codigo, ativo),
+          core_perfis!inner(codigo, ativo)
+        `)
+        .eq('ativo', true)
+        .eq('core_usuarios.ativo', true)
+        .eq('core_sistemas.codigo', 'GESTOR_ACESSO')
+        .eq('core_sistemas.ativo', true)
+        .eq('core_perfis.codigo', 'ADMINISTRADOR')
+        .eq('core_perfis.ativo', true)
+
+      if (adminQueryErr) {
+        return {
+          safe: false,
+          error: `Falha ao validar integridade de administradores: ${adminQueryErr.message}`,
+        }
+      }
+
+      // Outros administradores ativos (exceto o usuário alvo)
+      const otherActiveAdmins = (currentAdmins || []).filter((a) => a.usuario_id !== targetUserId)
+
+      // Se houver outro(s) administrador(es) ativo(s), é sempre seguro
+      if (otherActiveAdmins.length > 0) {
+        return { safe: true }
+      }
+
+      // Não há outros administradores ativos.
+      // O usuário alvo é o ÚNICO administrador ativo do Gestor de Acesso.
+      // Se ele estiver sendo inativado: BLOQUEAR!
+      if (!prospectiveUserActive) {
+        return {
+          safe: false,
+          error:
+            'Operação bloqueada: não é permitido desativar o único Administrador ativo com perfil ADMINISTRADOR no sistema GESTOR_ACESSO.',
+        }
+      }
+
+      // Se os acessos estiverem sendo redefinidos, checar se ele CONTINUARÁ com perfil ADMINISTRADOR em GESTOR_ACESSO
+      if (prospectiveSistemas !== undefined) {
+        // Obter os IDs de sistema e perfil de GESTOR_ACESSO / ADMINISTRADOR
+        const { data: gaSistema } = await adminClient
+          .from('core_sistemas')
+          .select('id')
+          .eq('codigo', 'GESTOR_ACESSO')
+          .maybeSingle()
+
+        const { data: admPerfil } = await adminClient
+          .from('core_perfis')
+          .select('id')
+          .eq('codigo', 'ADMINISTRADOR')
+          .eq('sistema_id', gaSistema?.id || '')
+          .maybeSingle()
+
+        const stillHasAdminRole = prospectiveSistemas.some(
+          (s) => s.sistema_id === gaSistema?.id && s.perfil_id === admPerfil?.id,
+        )
+
+        if (!stillHasAdminRole) {
+          return {
+            safe: false,
+            error:
+              'Operação bloqueada: não é permitido remover o perfil ADMINISTRADOR do sistema GESTOR_ACESSO do único administrador ativo existente.',
+          }
+        }
+      }
+
+      return { safe: true }
     }
 
     // =========================================================================
@@ -190,35 +366,15 @@ Deno.serve(async (req: Request) => {
         validatedGestorId = gestorData.id
       }
 
-      // Validar os acessos informados (sistema habilitado com perfil correspondente àquele sistema)
-      const sanitizedSistemas: SistemaInput[] = []
-      if (Array.isArray(sistemas)) {
-        for (const item of sistemas) {
-          if (!item.sistema_id || !item.perfil_id) continue
-
-          // Checa se o perfil de fato pertence àquele sistema
-          const { data: perfilCheck, error: pCheckErr } = await adminClient
-            .from('core_perfis')
-            .select('id, sistema_id, ativo')
-            .eq('id', item.perfil_id)
-            .eq('sistema_id', item.sistema_id)
-            .maybeSingle()
-
-          if (pCheckErr || !perfilCheck) {
-            return new Response(
-              JSON.stringify({
-                error: `Perfil ${item.perfil_id} não pertence ao sistema ${item.sistema_id}.`,
-              }),
-              { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-            )
-          }
-
-          sanitizedSistemas.push({
-            sistema_id: item.sistema_id,
-            perfil_id: item.perfil_id,
-          })
-        }
+      // Validação prévia completa dos pares sistema/perfil
+      const valSistemas = await validateSistemasPairs(sistemas)
+      if (!valSistemas.valid) {
+        return new Response(JSON.stringify({ error: valSistemas.error }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
       }
+      const sanitizedSistemas: SistemaInput[] = valSistemas.rows || []
 
       // Opcional: verificar se já existe em auth.users ou enviar convite
       let linkedAuthUserId: string | null = null
@@ -229,8 +385,8 @@ Deno.serve(async (req: Request) => {
 
       if (existingAuth) {
         linkedAuthUserId = existingAuth.id
-      } else if (send_invite) {
-        // Disparar convite de acesso pelo Supabase Auth
+      } else if (send_invite && isAtivo) {
+        // Convite seguro: somente se o usuário estiver ativo
         const { data: inviteData, error: inviteErr } =
           await adminClient.auth.admin.inviteUserByEmail(normEmail, {
             data: { nome: normNome },
@@ -258,7 +414,7 @@ Deno.serve(async (req: Request) => {
         throw insertUserErr || new Error('Falha ao inserir core_usuarios.')
       }
 
-      // Inserir acessos em core_usuario_sistemas
+      // Inserir acessos em core_usuario_sistemas com verificação estrita de erros
       if (sanitizedSistemas.length > 0) {
         const acessosRows = sanitizedSistemas.map((item) => ({
           usuario_id: newUsuario.id,
@@ -272,7 +428,9 @@ Deno.serve(async (req: Request) => {
           .insert(acessosRows)
 
         if (insertAcessosErr) {
-          console.error('Erro ao inserir acessos:', insertAcessosErr)
+          // Reverter inserção do usuário caso os acessos falhem (segurança estrita)
+          await adminClient.from('core_usuarios').delete().eq('id', newUsuario.id)
+          throw new Error(`Falha ao atribuir acessos do usuário: ${insertAcessosErr.message}`)
         }
       }
 
@@ -284,6 +442,7 @@ Deno.serve(async (req: Request) => {
     // =========================================================================
     // ACTION: update_user
     // Atualiza dados cadastrais, gestor e acessos em core_usuario_sistemas
+    // com validação prévia de todos os pares e proteção do último administrador
     // =========================================================================
     if (action === 'update_user') {
       const { id, nome, email, ativo, gestor_id, sistemas } = body
@@ -299,6 +458,7 @@ Deno.serve(async (req: Request) => {
       const normEmail = String(email || '')
         .trim()
         .toLowerCase()
+      const prospectiveAtivo = ativo !== undefined ? Boolean(ativo) : true
 
       if (!normNome || !normEmail) {
         return new Response(JSON.stringify({ error: 'Nome e e-mail são obrigatórios.' }), {
@@ -357,48 +517,57 @@ Deno.serve(async (req: Request) => {
         validatedGestorId = gestorData.id
       }
 
-      // Atualizar core_usuarios
-      const { data: updatedUser, error: updateErr } = await adminClient
-        .from('core_usuarios')
-        .update({
-          nome: normNome,
-          email: normEmail,
-          ativo: ativo ?? true,
-          gestor_id: validatedGestorId,
-        })
-        .eq('id', id)
-        .select()
-        .single()
-
-      if (updateErr) throw updateErr
-
-      // Atualizar acessos (se o array de sistemas foi fornecido)
+      // Validação prévia de todos os pares sistema/perfil caso sistemas tenha sido enviado
+      let validatedSistemas: SistemaInput[] | undefined = undefined
       if (Array.isArray(sistemas)) {
-        // Deletar acessos existentes deste usuário
-        await adminClient.from('core_usuario_sistemas').delete().eq('usuario_id', id)
+        const valSistemas = await validateSistemasPairs(sistemas)
+        if (!valSistemas.valid) {
+          return new Response(JSON.stringify({ error: valSistemas.error }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          })
+        }
+        validatedSistemas = valSistemas.rows || []
+      }
 
-        const sanitizedSistemas: SistemaInput[] = []
-        for (const item of sistemas) {
-          if (!item.sistema_id || !item.perfil_id) continue
+      // Proteção de segurança: verificar se a operação deixará o Gestor de Acessos sem admin ativo
+      const adminSafety = await willKeepAtLeastOneGestorAcessoAdmin(
+        id,
+        prospectiveAtivo,
+        validatedSistemas,
+      )
+      if (!adminSafety.safe) {
+        return new Response(JSON.stringify({ error: adminSafety.error }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
 
-          // Validar coerência perfil x sistema
-          const { data: perfilCheck } = await adminClient
-            .from('core_perfis')
-            .select('id')
-            .eq('id', item.perfil_id)
-            .eq('sistema_id', item.sistema_id)
-            .maybeSingle()
+      // Atualizar acessos atomicamente com verificação estrita de erros
+      if (validatedSistemas !== undefined) {
+        // Guardar estado anterior para rollback defensivo caso ocorra erro no insert
+        const { data: previousAcessos, error: getPrevErr } = await adminClient
+          .from('core_usuario_sistemas')
+          .select('usuario_id, sistema_id, perfil_id, ativo')
+          .eq('usuario_id', id)
 
-          if (perfilCheck) {
-            sanitizedSistemas.push({
-              sistema_id: item.sistema_id,
-              perfil_id: item.perfil_id,
-            })
-          }
+        if (getPrevErr) {
+          throw new Error(`Falha ao verificar acessos anteriores: ${getPrevErr.message}`)
         }
 
-        if (sanitizedSistemas.length > 0) {
-          const rows = sanitizedSistemas.map((item) => ({
+        // Remover acessos existentes
+        const { error: deleteAcessosErr } = await adminClient
+          .from('core_usuario_sistemas')
+          .delete()
+          .eq('usuario_id', id)
+
+        if (deleteAcessosErr) {
+          throw new Error(`Falha ao remover acessos anteriores: ${deleteAcessosErr.message}`)
+        }
+
+        // Inserir os novos acessos validados previamente
+        if (validatedSistemas.length > 0) {
+          const rows = validatedSistemas.map((item) => ({
             usuario_id: id,
             sistema_id: item.sistema_id,
             perfil_id: item.perfil_id,
@@ -410,10 +579,29 @@ Deno.serve(async (req: Request) => {
             .insert(rows)
 
           if (insertAcessosErr) {
-            console.error('Erro ao atualizar acessos:', insertAcessosErr)
+            // Tentativa de rollback para restaurar acessos anteriores em caso de falha
+            if (previousAcessos && previousAcessos.length > 0) {
+              await adminClient.from('core_usuario_sistemas').insert(previousAcessos)
+            }
+            throw new Error(`Falha ao inserir novos acessos: ${insertAcessosErr.message}`)
           }
         }
       }
+
+      // Atualizar core_usuarios
+      const { data: updatedUser, error: updateErr } = await adminClient
+        .from('core_usuarios')
+        .update({
+          nome: normNome,
+          email: normEmail,
+          ativo: prospectiveAtivo,
+          gestor_id: validatedGestorId,
+        })
+        .eq('id', id)
+        .select()
+        .single()
+
+      if (updateErr) throw updateErr
 
       return new Response(JSON.stringify({ success: true, usuario: updatedUser }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -422,7 +610,7 @@ Deno.serve(async (req: Request) => {
 
     // =========================================================================
     // ACTION: toggle_status
-    // Ativa ou desativa um usuário corporativo
+    // Ativa ou desativa um usuário corporativo com proteção de último administrador
     // =========================================================================
     if (action === 'toggle_status') {
       const { id } = body
@@ -448,6 +636,18 @@ Deno.serve(async (req: Request) => {
       }
 
       const novoStatus = !currentUser.ativo
+
+      // Se for desativação, garantir que não deixará o sistema sem administrador ativo
+      if (!novoStatus) {
+        const adminSafety = await willKeepAtLeastOneGestorAcessoAdmin(id, false)
+        if (!adminSafety.safe) {
+          return new Response(JSON.stringify({ error: adminSafety.error }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+
       const { data: updatedUser, error: updateErr } = await adminClient
         .from('core_usuarios')
         .update({ ativo: novoStatus })
@@ -467,7 +667,9 @@ Deno.serve(async (req: Request) => {
 
     // =========================================================================
     // ACTION: invite_user
-    // Envia convite por e-mail via Supabase Auth admin API e vincula auth_user_id
+    // Envia convite por e-mail ou redefinição de senha com:
+    // 1. Bloqueio para usuário inativo
+    // 2. redirectTo via APP_URL configurado em variável segura
     // =========================================================================
     if (action === 'invite_user') {
       const { id } = body
@@ -492,10 +694,39 @@ Deno.serve(async (req: Request) => {
         })
       }
 
+      // Bloquear convite ou redefinição para usuário inativo
+      if (!usuario.ativo) {
+        return new Response(
+          JSON.stringify({
+            error:
+              'Operação não permitida: não é possível convidar ou redefinir senha de um usuário inativo.',
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      // APP_URL seguro vindo de variável de ambiente / segredo (nunca hardcoded nem URL implícita)
+      const appUrlEnv = Deno.env.get('APP_URL')
+      const APP_URL = appUrlEnv ? appUrlEnv.replace(/\/+$/, '') : null
+
+      if (!APP_URL) {
+        return new Response(
+          JSON.stringify({
+            error:
+              'A variável segura APP_URL não está configurada no backend. Configure o domínio publicado do Gestor de Acessos.',
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const resetRedirectUrl = `${APP_URL}/login`
+
       // Se já tem auth_user_id, envia recuperação de senha ao invés de convite
       if (usuario.auth_user_id) {
-        // Enviar link de redefinição de senha
-        const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(usuario.email)
+        // Enviar link de redefinição de senha com redirectTo explícito vindo de APP_URL
+        const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(usuario.email, {
+          redirectTo: resetRedirectUrl,
+        })
         if (resetErr) throw resetErr
 
         return new Response(
@@ -520,6 +751,7 @@ Deno.serve(async (req: Request) => {
         const { data: inviteData, error: inviteErr } =
           await adminClient.auth.admin.inviteUserByEmail(usuario.email, {
             data: { nome: usuario.nome },
+            redirectTo: resetRedirectUrl,
           })
 
         if (inviteErr) throw inviteErr

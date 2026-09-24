@@ -37,6 +37,10 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
   if (!usuario) return null
 
   const handleConfirmReset = async () => {
+    if (!usuario.ativo) {
+      setError('Não é possível convidar ou redefinir senha de um usuário inativo.')
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -164,7 +168,7 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
               <Button
                 type="button"
                 size="sm"
-                disabled={loading}
+                disabled={loading || !usuario.ativo}
                 onClick={handleConfirmReset}
                 className="text-xs bg-[#1B4E8C] hover:bg-[#163F73] text-white"
               >

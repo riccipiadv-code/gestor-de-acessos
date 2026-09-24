@@ -85,6 +85,38 @@ export default function UsuariosPage() {
   }, [usuariosFiltrados, paginaAtual])
 
   const handleToggleStatus = async (usuario: UsuarioComDetalhes) => {
+    // Validação preventiva no frontend: não desativar se for o único admin ativo de GESTOR_ACESSO
+    if (usuario.ativo) {
+      const isGestorAdmin = usuario.sistemasAcesso.some(
+        (sa) =>
+          sa.sistemaCodigo === 'GESTOR_ACESSO' && sa.perfilCodigo === 'ADMINISTRADOR' && sa.ativo,
+      )
+
+      if (isGestorAdmin) {
+        const outrosAdminsAtivos = usuarios.filter(
+          (u) =>
+            u.id !== usuario.id &&
+            u.ativo &&
+            u.sistemasAcesso.some(
+              (sa) =>
+                sa.sistemaCodigo === 'GESTOR_ACESSO' &&
+                sa.perfilCodigo === 'ADMINISTRADOR' &&
+                sa.ativo,
+            ),
+        )
+
+        if (outrosAdminsAtivos.length === 0) {
+          toast({
+            title: 'Operação bloqueada',
+            description:
+              'Não é permitido desativar o único Administrador ativo no sistema GESTOR_ACESSO.',
+            variant: 'destructive',
+          })
+          return
+        }
+      }
+    }
+
     const res = await toggleUsuarioAtivo(usuario.id)
     if (res.success) {
       if (res.ativo) {

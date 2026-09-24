@@ -182,6 +182,54 @@ export function UserModal({
       newErrors.gestor = 'O usuário não pode ser gestor de si mesmo'
     }
 
+    // Proteção preventiva: impedir deixar o Gestor de Acessos sem administrador ativo
+    if (usuarioParaEditar) {
+      const gaSistema = sistemas.find((s) => s.codigo === 'GESTOR_ACESSO')
+      const admPerfil = perfis.find(
+        (p) => p.codigo === 'ADMINISTRADOR' && p.sistema_id === gaSistema?.id,
+      )
+
+      if (gaSistema && admPerfil) {
+        // Verificar se este usuário é atualmente um Administrador ativo de GESTOR_ACESSO
+        const isCurrentlyGestorAdmin =
+          usuarioParaEditar.ativo &&
+          usuarioParaEditar.sistemasAcesso.some(
+            (sa) => sa.sistemaId === gaSistema.id && sa.perfilId === admPerfil.id && sa.ativo,
+          )
+
+        if (isCurrentlyGestorAdmin) {
+          // Verificar se existem outros administradores ativos de GESTOR_ACESSO
+          const otherActiveGestorAdmins = todosUsuarios.filter(
+            (u) =>
+              u.id !== usuarioParaEditar.id &&
+              u.ativo &&
+              u.sistemasAcesso.some(
+                (sa) => sa.sistemaId === gaSistema.id && sa.perfilId === admPerfil.id && sa.ativo,
+              ),
+          )
+
+          if (otherActiveGestorAdmins.length === 0) {
+            // Este usuário é o ÚNICO administrador ativo de GESTOR_ACESSO
+            if (!ativo) {
+              setServerError(
+                'Operação bloqueada: não é permitido desativar o único Administrador ativo no sistema GESTOR_ACESSO.',
+              )
+              return false
+            }
+
+            const gaSelection = sistemasState[gaSistema.id]
+            const willKeepAdmin = gaSelection?.selecionado && gaSelection.perfil_id === admPerfil.id
+            if (!willKeepAdmin) {
+              setServerError(
+                'Operação bloqueada: não é permitido remover o perfil ADMINISTRADOR do sistema GESTOR_ACESSO do único administrador ativo existente.',
+              )
+              return false
+            }
+          }
+        }
+      }
+    }
+
     // Regra estrita: sistema habilitado = perfil daquele sistema obrigatório
     let hasPerfilError = false
     Object.values(sistemasState).forEach((item) => {
