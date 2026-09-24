@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { AlertCircle, ShieldAlert, Check } from 'lucide-react'
+import { AlertCircle, ShieldAlert, Check, Layers } from 'lucide-react'
 import type {
   UsuarioComDetalhes,
   SistemaComEstatisticas,
@@ -120,7 +120,7 @@ export function UserModal({
         [sistemaId]: {
           sistema_id: sistemaId,
           selecionado: checked,
-          // Se desmarcou, limpa perfil
+          // Se desmarcou, limpa perfil; se marcou e havia perfil anterior preserva
           perfil_id: checked ? atual?.perfil_id || '' : '',
         },
       }
@@ -168,11 +168,11 @@ export function UserModal({
     } else {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
       if (!emailRegex.test(email.trim())) {
-        newErrors.email = 'Informe um endereço de e-mail válido'
+        newErrors.email = 'Informe um endereço de e-mail corporativo válido'
       }
     }
 
-    // Validação estrita: para todo sistema marcado, o perfil é OBRIGATÓRIO
+    // Validação estrita: sistema habilitado = perfil obrigatório; não habilitado = nenhum acesso
     let hasPerfilError = false
     Object.values(sistemasState).forEach((item) => {
       if (item.selecionado && !item.perfil_id) {
@@ -193,7 +193,7 @@ export function UserModal({
     e.preventDefault()
     if (!validate()) return
 
-    // Filtra apenas os sistemas marcados
+    // Filtra apenas os sistemas marcados (sistema habilitado com perfil)
     const sistemasSelecionados = Object.values(sistemasState)
       .filter((s) => s.selecionado && Boolean(s.perfil_id))
       .map((s) => ({
@@ -221,22 +221,22 @@ export function UserModal({
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-white p-6 rounded-xl border border-slate-200">
         <DialogHeader className="pb-3 border-b border-slate-100">
           <DialogTitle className="text-lg font-bold text-slate-900">
-            {usuarioParaEditar ? 'Editar Usuário Corporativo' : 'Novo Usuário Corporativo'}
+            {usuarioParaEditar ? 'Editar Usuário' : 'Novo Usuário'}
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-500">
             {usuarioParaEditar
-              ? 'Atualize os dados e acessos centrais aos sistemas corporativos.'
-              : 'Cadastre a identidade central e defina as credenciais por sistema.'}
+              ? 'Atualize os dados principais e defina o perfil de acesso em cada sistema.'
+              : 'Cadastre o usuário corporativo e configure as permissões por sistema.'}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 pt-2">
-          {/* Seção 1: Dados do Usuário */}
+          {/* Seção 1: Dados Principais (Nome, E-mail, Gestor, Ativo) */}
           <div className="space-y-4">
             <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
               <span className="w-2 h-2 rounded-full bg-[#1B4E8C]" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                1. Dados Corporativos
+                Dados Principais
               </h3>
             </div>
 
@@ -251,59 +251,64 @@ export function UserModal({
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
                   placeholder="Ex.: Mariana Duarte Ramos"
-                  className={errors.nome ? 'border-red-500' : ''}
+                  className={errors.nome ? 'border-red-500 text-xs' : 'text-xs'}
                 />
                 {errors.nome && (
-                  <p className="text-[11px] text-red-600 flex items-center gap-1">
+                  <p className="text-[11px] text-red-600 flex items-center gap-1 font-medium">
                     <AlertCircle className="w-3 h-3" /> {errors.nome}
                   </p>
                 )}
               </div>
 
               {/* Email */}
-              <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-xs font-semibold text-slate-700">
-                  E-mail Corporativo <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="usuario@riccipi.com.br"
-                  className={errors.email ? 'border-red-500' : ''}
-                />
-                {errors.email && (
-                  <p className="text-[11px] text-red-600 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" /> {errors.email}
-                  </p>
-                )}
-              </div>
+              <div className="space-y-1.5 sm:col-span-2 sm:grid sm:grid-cols-2 sm:gap-4 sm:space-y-0">
+                <div className="space-y-1.5">
+                  <Label htmlFor="email" className="text-xs font-semibold text-slate-700">
+                    E-mail <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="usuario@riccipi.com.br"
+                    className={errors.email ? 'border-red-500 text-xs' : 'text-xs'}
+                  />
+                  {errors.email && (
+                    <p className="text-[11px] text-red-600 flex items-center gap-1 font-medium">
+                      <AlertCircle className="w-3 h-3" /> {errors.email}
+                    </p>
+                  )}
+                </div>
 
-              {/* Gestor Imediato */}
-              <div className="space-y-1.5">
-                <Label htmlFor="gestor" className="text-xs font-semibold text-slate-700">
-                  Gestor Imediato
-                </Label>
-                <Select value={gestorId} onValueChange={setGestorId}>
-                  <SelectTrigger id="gestor" className="text-xs">
-                    <SelectValue placeholder="Selecione o gestor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Nenhum (nível diretor/executivo)</SelectItem>
-                    {possiveisGestores.map((g) => (
-                      <SelectItem key={g.id} value={g.id}>
-                        {g.nome} ({g.email})
+                {/* Gestor */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="gestor" className="text-xs font-semibold text-slate-700">
+                    Gestor
+                  </Label>
+                  <Select value={gestorId} onValueChange={setGestorId}>
+                    <SelectTrigger id="gestor" className="text-xs">
+                      <SelectValue placeholder="Selecione o gestor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none" className="text-xs">
+                        Nenhum (Diretoria / Autônomo)
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                      {possiveisGestores.map((g) => (
+                        <SelectItem key={g.id} value={g.id} className="text-xs">
+                          {g.nome} ({g.email})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
-              {/* Vínculo LegalDesk */}
-              <div className="space-y-1.5">
+              {/* Identificador LegalDesk opcional */}
+              <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="legaldesk" className="text-xs font-semibold text-slate-700">
-                  Vínculo LegalDesk <span className="text-slate-400 font-normal">(opcional)</span>
+                  Identificador LegalDesk{' '}
+                  <span className="text-slate-400 font-normal">(opcional)</span>
                 </Label>
                 <Input
                   id="legaldesk"
@@ -314,15 +319,15 @@ export function UserModal({
                 />
               </div>
 
-              {/* Switch Ativo com Nota Explícita */}
+              {/* Switch Ativo / Inativo com aviso de bloqueio universal */}
               <div className="space-y-1.5 sm:col-span-2 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                 <div className="flex items-center justify-between">
                   <div>
                     <Label htmlFor="ativo" className="text-xs font-bold text-slate-800 block">
-                      Status Corporativo da Conta
+                      Status do Usuário
                     </Label>
                     <span className="text-[11px] text-slate-500">
-                      Define se a credencial central está ativa ou suspensa
+                      Usuário ativo pode autenticar e acessar os sistemas autorizados.
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -336,28 +341,30 @@ export function UserModal({
                     <Switch id="ativo" checked={ativo} onCheckedChange={setAtivo} />
                   </div>
                 </div>
-                <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-start gap-2 text-[11px] text-amber-800 bg-amber-50/80 p-2 rounded">
-                  <ShieldAlert className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
-                  <span>
-                    <strong>Regra Global de Desligamento:</strong> Usuário inativo não acessa nenhum
-                    sistema. A alteração aqui bloqueia o acesso corporativo imediatamente.
-                  </span>
-                </div>
+                {!ativo && (
+                  <div className="mt-2 pt-2 border-t border-slate-200 flex items-start gap-2 text-[11px] text-red-800 bg-red-50 p-2 rounded">
+                    <ShieldAlert className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+                    <span>
+                      <strong>Atenção:</strong> Usuário inativo tem todos os acessos bloqueados
+                      imediatamente, independente das permissões abaixo.
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Seção 2: Acesso aos Sistemas */}
+          {/* Seção 2: Acesso aos Sistemas (Habilitar acesso + Perfil obrigatório) */}
           <div className="space-y-4">
             <div className="flex items-center justify-between pb-1 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#0E7C7B]" />
+                <Layers className="w-4 h-4 text-[#1B4E8C]" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  2. Acesso aos Sistemas e Perfis
+                  Acesso aos Sistemas
                 </h3>
               </div>
               <span className="text-[11px] text-slate-400">
-                Perfis pertencem ao sistema específico
+                Habilitado = perfil obrigatório • Desabilitado = sem acesso
               </span>
             </div>
 
@@ -371,7 +378,6 @@ export function UserModal({
 
                 // Perfis disponíveis para este sistema
                 const perfisDoSistema = perfis.filter((p) => p.sistema_id === sistema.id && p.ativo)
-
                 const hasError = Boolean(errors.perfis?.[sistema.id])
 
                 return (
@@ -404,23 +410,35 @@ export function UserModal({
                             </span>
                             {!sistema.ativo && (
                               <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                                Inativo no momento
+                                Sistema inativo
                               </span>
                             )}
                           </Label>
                           <p className="text-[11px] text-slate-500 mt-0.5">{sistema.descricao}</p>
                         </div>
                       </div>
+
+                      {/* Status de Habilitação */}
+                      <span
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded shrink-0 ${
+                          selection.selecionado
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {selection.selecionado ? 'Acesso: Ativo' : 'Acesso: Desabilitado'}
+                      </span>
                     </div>
 
-                    {/* Quando marcado: exibição OBRIGATÓRIA do select de perfil */}
+                    {/* Quando habilitado: seleção OBRIGATÓRIA do perfil do usuário naquele sistema */}
                     {selection.selecionado && (
                       <div className="mt-3 pl-7 pt-3 border-t border-slate-200/60 space-y-1.5">
                         <Label
                           htmlFor={`perfil-${sistema.id}`}
                           className="text-xs font-semibold text-slate-700 flex items-center gap-1"
                         >
-                          Perfil de Acesso em {sistema.nome} <span className="text-red-500">*</span>
+                          Perfil do Usuário em {sistema.nome}{' '}
+                          <span className="text-red-500">*</span>
                         </Label>
                         <Select
                           value={selection.perfil_id || ''}
@@ -432,12 +450,12 @@ export function UserModal({
                               hasError ? 'border-red-500 ring-1 ring-red-500' : ''
                             }`}
                           >
-                            <SelectValue placeholder={`Selecione o perfil para ${sistema.nome}`} />
+                            <SelectValue placeholder={`Selecione o perfil em ${sistema.nome}`} />
                           </SelectTrigger>
                           <SelectContent>
                             {perfisDoSistema.map((p) => (
                               <SelectItem key={p.id} value={p.id} className="text-xs">
-                                <div className="flex flex-col">
+                                <div className="flex flex-col text-left">
                                   <span className="font-medium text-slate-900">{p.nome}</span>
                                   <span className="text-[10px] text-slate-500">{p.descricao}</span>
                                 </div>
@@ -471,7 +489,7 @@ export function UserModal({
             </Button>
             <Button type="submit" className="text-xs bg-[#1B4E8C] hover:bg-[#163F73] text-white">
               <Check className="w-3.5 h-3.5 mr-1.5" />
-              {usuarioParaEditar ? 'Salvar Alterações' : 'Criar Usuário'}
+              {usuarioParaEditar ? 'Salvar Alterações' : 'Cadastrar Usuário'}
             </Button>
           </DialogFooter>
         </form>

@@ -4,12 +4,9 @@ import {
   Search,
   Plus,
   Edit2,
-  Eye,
   Power,
-  Filter,
-  CheckCircle2,
-  XCircle,
-  Shield,
+  KeyRound,
+  ShieldCheck,
   ChevronLeft,
   ChevronRight,
   ShieldAlert,
@@ -29,6 +26,7 @@ import {
 import { useToast } from '@/hooks/use-toast'
 import { UserModal } from '@/components/UserModal'
 import { ViewAccessModal } from '@/components/ViewAccessModal'
+import { ResetPasswordModal } from '@/components/ResetPasswordModal'
 import type { UsuarioComDetalhes } from '@/lib/data/types'
 
 export default function UsuariosPage() {
@@ -44,10 +42,14 @@ export default function UsuariosPage() {
   // Modais
   const [modalUsuarioOpen, setModalUsuarioOpen] = useState(false)
   const [usuarioEmEdicao, setUsuarioEmEdicao] = useState<UsuarioComDetalhes | null>(null)
+
   const [modalAcessoOpen, setModalAcessoOpen] = useState(false)
   const [usuarioVisualizado, setUsuarioVisualizado] = useState<UsuarioComDetalhes | null>(null)
 
-  // Filtragem
+  const [modalResetSenhaOpen, setModalResetSenhaOpen] = useState(false)
+  const [usuarioResetSenha, setUsuarioResetSenha] = useState<UsuarioComDetalhes | null>(null)
+
+  // Filtragem: busca por Nome ou E-mail e filtro Ativo/Inativo
   const usuariosFiltrados = useMemo(() => {
     return usuarios.filter((usuario) => {
       // Filtro de status
@@ -83,7 +85,7 @@ export default function UsuariosPage() {
     } else {
       toast({
         title: 'Usuário desativado',
-        description: `${usuario.nome} teve todos os acessos bloqueados universalmente.`,
+        description: `${usuario.nome} foi desativado. Todos os acessos aos sistemas foram bloqueados.`,
         variant: 'destructive',
       })
     }
@@ -99,9 +101,20 @@ export default function UsuariosPage() {
     setModalUsuarioOpen(true)
   }
 
-  const handleOpenVisualizar = (usuario: UsuarioComDetalhes) => {
+  const handleOpenGerenciarAcessos = (usuario: UsuarioComDetalhes) => {
+    // Abre a experiência centralizada de cadastro/edição na aba/seção de sistemas
+    setUsuarioEmEdicao(usuario)
+    setModalUsuarioOpen(true)
+  }
+
+  const handleOpenVisualizarAcessos = (usuario: UsuarioComDetalhes) => {
     setUsuarioVisualizado(usuario)
     setModalAcessoOpen(true)
+  }
+
+  const handleOpenResetSenha = (usuario: UsuarioComDetalhes) => {
+    setUsuarioResetSenha(usuario)
+    setModalResetSenhaOpen(true)
   }
 
   const handleSaveUsuario = (dados: Parameters<typeof createUsuario>[0]) => {
@@ -109,13 +122,13 @@ export default function UsuariosPage() {
       updateUsuario(usuarioEmEdicao.id, dados)
       toast({
         title: 'Usuário atualizado com sucesso',
-        description: 'Os dados cadastrais e permissões centrais foram salvos.',
+        description: 'Os dados cadastrais e acessos aos sistemas foram salvos.',
       })
     } else {
       createUsuario(dados)
       toast({
         title: 'Usuário criado com sucesso',
-        description: 'Novo usuário corporativo registrado no Gestor de Acesso.',
+        description: 'Novo usuário registrado no Gestor de Acesso.',
       })
     }
   }
@@ -131,15 +144,13 @@ export default function UsuariosPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header da Tela com Subtítulo e Botão de Ação */}
+      {/* Cabeçalho da Tela: Título, Descrição e Botão Novo Usuário */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-            Cadastro de Usuários Corporativos
-          </h2>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Gestão de Usuários</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gerenciamento centralizado de identidades, gestores e vínculos aos sistemas da
-            organização
+            Administração central de identidades, status e perfis de acesso aos sistemas
+            corporativos
           </p>
         </div>
         <Button
@@ -151,24 +162,25 @@ export default function UsuariosPage() {
         </Button>
       </div>
 
-      {/* Regra de Desativação Callout */}
+      {/* Regra de Desativação e Segurança */}
       <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 flex items-center justify-between gap-3 text-xs text-amber-900">
         <div className="flex items-center gap-2">
           <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
           <span>
             <strong>Diretriz de Segurança:</strong> Não há exclusão física de registros para
             preservar o histórico de auditoria. Usuários desligados devem ser{' '}
-            <strong>desativados</strong>, bloqueando imediatamente o acesso a todos os sistemas.
+            <strong>desativados</strong>, bloqueando imediatamente o acesso efetivo a todos os
+            sistemas.
           </span>
         </div>
-        <span className="hidden md:inline font-mono text-[11px] bg-amber-100/70 px-2 py-0.5 rounded text-amber-800">
-          Soft Disable Rule
+        <span className="hidden md:inline font-mono text-[11px] bg-amber-100/70 px-2 py-0.5 rounded text-amber-800 shrink-0">
+          Sem Exclusão Física
         </span>
       </div>
 
       {/* Barra de Filtros e Busca */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3">
-        {/* Input de Busca */}
+        {/* Busca por Nome ou E-mail */}
         <div className="relative w-full md:w-80">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <Input
@@ -182,11 +194,9 @@ export default function UsuariosPage() {
           />
         </div>
 
-        {/* Filtro por Status */}
+        {/* Filtro por Status Ativo / Inativo */}
         <div className="flex items-center gap-2 w-full md:w-auto">
-          <span className="text-xs text-slate-500 font-medium whitespace-nowrap">
-            Filtrar status:
-          </span>
+          <span className="text-xs text-slate-500 font-medium whitespace-nowrap">Status:</span>
           <Select
             value={filtroStatus}
             onValueChange={(val: 'todos' | 'ativos' | 'inativos') => {
@@ -194,7 +204,7 @@ export default function UsuariosPage() {
               setPaginaAtual(1)
             }}
           >
-            <SelectTrigger className="w-[140px] text-xs">
+            <SelectTrigger className="w-[150px] text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -212,7 +222,7 @@ export default function UsuariosPage() {
         </div>
       </div>
 
-      {/* Tabela de Usuários (Desktop) / Cards (Mobile) */}
+      {/* Tabela Principal: Nome, E-mail, Gestor, Status, Acessos, Ações */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
         {usuariosFiltrados.length === 0 ? (
           <div className="py-16 px-4 text-center space-y-3">
@@ -222,8 +232,8 @@ export default function UsuariosPage() {
             <h3 className="text-sm font-semibold text-slate-800">Nenhum usuário encontrado</h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
               {busca
-                ? `Não encontramos registros correspondentes à busca "${busca}". Tente outro termo.`
-                : 'Não há usuários cadastrados com o filtro selecionado.'}
+                ? `Não encontramos registros correspondentes a "${busca}". Tente outro termo.`
+                : 'Não há usuários cadastrados para o filtro selecionado.'}
             </p>
             {busca && (
               <Button
@@ -242,43 +252,42 @@ export default function UsuariosPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                    <th className="py-3 px-4">Nome & E-mail</th>
-                    <th className="py-3 px-4">Gestor Imediato</th>
+                    <th className="py-3 px-4">Nome</th>
+                    <th className="py-3 px-4">E-mail</th>
+                    <th className="py-3 px-4">Gestor</th>
                     <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Sistemas com Acesso</th>
+                    <th className="py-3 px-4">Acessos</th>
                     <th className="py-3 px-4 text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
                   {usuariosPaginados.map((usuario) => {
                     const totalSistemas = usuario.sistemasAcesso.length
-                    const sistemasExibidos = usuario.sistemasAcesso.slice(0, 3)
-                    const restante = totalSistemas - 3
 
                     return (
                       <tr
                         key={usuario.id}
                         className={`hover:bg-slate-50/70 transition-colors ${
-                          !usuario.ativo ? 'bg-slate-50/30' : ''
+                          !usuario.ativo ? 'bg-slate-50/40' : ''
                         }`}
                       >
-                        {/* Nome & Email */}
+                        {/* Nome com Avatar */}
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-3">
-                            <Avatar className="w-9 h-9 bg-[#1B4E8C] text-white">
+                            <Avatar className="w-8 h-8 bg-[#1B4E8C] text-white">
                               <AvatarFallback className="bg-[#1B4E8C] text-white text-xs font-semibold">
                                 {getInitials(usuario.nome)}
                               </AvatarFallback>
                             </Avatar>
-                            <div>
-                              <div className="font-semibold text-slate-900 text-xs sm:text-sm">
-                                {usuario.nome}
-                              </div>
-                              <div className="text-[11px] text-slate-500 font-mono">
-                                {usuario.email}
-                              </div>
-                            </div>
+                            <span className="font-semibold text-slate-900 text-xs sm:text-sm">
+                              {usuario.nome}
+                            </span>
                           </div>
+                        </td>
+
+                        {/* E-mail */}
+                        <td className="py-3.5 px-4">
+                          <span className="text-xs text-slate-600 font-mono">{usuario.email}</span>
                         </td>
 
                         {/* Gestor */}
@@ -290,7 +299,7 @@ export default function UsuariosPage() {
                           )}
                         </td>
 
-                        {/* Status Chip */}
+                        {/* Status */}
                         <td className="py-3.5 px-4">
                           {usuario.ativo ? (
                             <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-50 border-emerald-200 text-xs font-medium">
@@ -305,63 +314,71 @@ export default function UsuariosPage() {
                           )}
                         </td>
 
-                        {/* Sistemas com acesso */}
+                        {/* Acessos (Sistemas e Perfis vinculados) */}
                         <td className="py-3.5 px-4">
                           {!usuario.ativo ? (
                             <span className="text-xs text-slate-400 italic">
-                              Sem acesso — usuário inativo
+                              Acessos bloqueados (inativo)
                             </span>
                           ) : totalSistemas > 0 ? (
                             <div className="flex flex-wrap items-center gap-1.5">
-                              {sistemasExibidos.map((sis) => (
+                              {usuario.sistemasAcesso.map((sis) => (
                                 <Badge
                                   key={sis.sistemaId}
                                   variant="outline"
                                   className="text-[11px] bg-slate-50 text-slate-700 border-slate-200"
+                                  title={`Perfil: ${sis.perfilNome}`}
                                 >
-                                  {sis.sistemaNome}
+                                  <span className="font-semibold text-slate-900 mr-1">
+                                    {sis.sistemaNome}:
+                                  </span>
+                                  <span className="text-[#1B4E8C]">{sis.perfilNome}</span>
                                 </Badge>
                               ))}
-                              {restante > 0 && (
-                                <Badge
-                                  variant="secondary"
-                                  className="text-[10px] bg-slate-200/80 text-slate-700 font-semibold"
-                                >
-                                  +{restante}
-                                </Badge>
-                              )}
                             </div>
                           ) : (
-                            <span className="text-xs text-slate-400">Nenhum sistema</span>
+                            <span className="text-xs text-slate-400">Nenhum acesso ativo</span>
                           )}
                         </td>
 
-                        {/* Ações */}
+                        {/* Ações previstas: Editar, Ativar/Desativar, Gerenciar acessos, Redefinir senha */}
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {/* Visualizar acessos */}
+                            {/* Gerenciar Acessos (Abre cadastro/edição focado nos sistemas) */}
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleOpenVisualizar(usuario)}
-                              className="h-8 w-8 p-0 text-slate-600 hover:text-slate-900 hover:bg-slate-100"
-                              title="Visualizar acessos e perfis"
+                              onClick={() => handleOpenGerenciarAcessos(usuario)}
+                              className="h-8 px-2 text-xs text-[#1B4E8C] hover:text-[#163F73] hover:bg-blue-50"
+                              title="Gerenciar acessos e perfis aos sistemas"
                             >
-                              <Eye className="w-4 h-4" />
+                              <ShieldCheck className="w-3.5 h-3.5 mr-1" />
+                              <span className="hidden xl:inline">Acessos</span>
                             </Button>
 
-                            {/* Editar */}
+                            {/* Editar dados cadastrais */}
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => handleOpenEditar(usuario)}
                               className="h-8 w-8 p-0 text-slate-600 hover:text-slate-900 hover:bg-slate-100"
-                              title="Editar dados do usuário"
+                              title="Editar dados cadastrais e acessos"
                             >
                               <Edit2 className="w-4 h-4" />
                             </Button>
 
-                            {/* Toggle Ativar / Desativar */}
+                            {/* Redefinir Senha */}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleOpenResetSenha(usuario)}
+                              className="h-8 w-8 p-0 text-slate-600 hover:text-amber-700 hover:bg-amber-50"
+                              title="Redefinir senha do usuário (Supabase Auth)"
+                            >
+                              <KeyRound className="w-4 h-4" />
+                            </Button>
+
+                            {/* Ativar / Desativar */}
                             <Button
                               variant="ghost"
                               size="sm"
@@ -433,7 +450,7 @@ export default function UsuariosPage() {
         )}
       </div>
 
-      {/* Modais */}
+      {/* Modal Único de Cadastro / Edição com Seção "Acesso aos Sistemas" */}
       <UserModal
         open={modalUsuarioOpen}
         onOpenChange={setModalUsuarioOpen}
@@ -444,10 +461,18 @@ export default function UsuariosPage() {
         onSave={handleSaveUsuario}
       />
 
+      {/* Modal de Detalhes dos Acessos */}
       <ViewAccessModal
         open={modalAcessoOpen}
         onOpenChange={setModalAcessoOpen}
         usuario={usuarioVisualizado}
+      />
+
+      {/* Modal Administrativo de Redefinição de Senha */}
+      <ResetPasswordModal
+        open={modalResetSenhaOpen}
+        onOpenChange={setModalResetSenhaOpen}
+        usuario={usuarioResetSenha}
       />
     </div>
   )
