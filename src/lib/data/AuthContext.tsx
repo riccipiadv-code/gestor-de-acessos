@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase/client'
+import { passwordRecoveryStorage } from './passwordRecoveryStorage'
 
 export interface AuthContextUser {
   id: string
@@ -35,14 +36,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
   const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(() => {
-    // Detecta se a URL contém fragmentos de recuperação (#access_token=...&type=recovery)
-    if (typeof window !== 'undefined') {
-      const hash = window.location.hash || ''
-      const search = window.location.search || ''
-      return hash.includes('type=recovery') || search.includes('type=recovery')
-    }
-    return false
+    // Inicializa a partir de:
+    // 1. Estado persistido em storage (sobrevive a reload, nova aba, reabertura do link)
+    // 2. Fragmentos/parâmetros de recovery na URL
+    const pendingInStorage = passwordRecoveryStorage.isPending()
+    const hasUrlParams = passwordRecoveryStorage.hasRecoveryUrlParams()
+    return pendingInStorage || hasUrlParams
   })
+
+  // Ref para sincronizar o estado síncrono nos callbacks sem depender de closures antigas
+  const isPasswordRecoveryRef = useRef<boolean>(isPasswordRecovery)
+  useEffect(() => {
+    isPasswordRecoveryRef.current = isPasswordRecovery
+  }, [isPasswordRecovery])
 
   // Validação OBRIGATÓRIA da cadeia de autorização:
   // auth.users → core_usuarios pelo auth_user_id → usuário ativo → RPC core_is_gestor_acesso_admin() = true
@@ -129,14 +135,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let isMounted = true
 
-    // Verifica se a URL atual aponta para fluxo de recuperação
-    const urlIndicaRecovery = () => {
-      if (typeof window === 'undefined') return false
-      const hash = window.location.hash || ''
-      const search = window.location.search || ''
-      return hash.includes('type=recovery') || search.includes('type=recovery')
-    }
-
     // Observador do Supabase Auth (sem async no callback conforme regra do template)
     const {
       data: { subscription },
@@ -144,41 +142,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(newSession)
       setAuthUser(newSession?.user ?? null)
 
-      // Evento crítico: PASSWORD_RECOVERY
+      // Evento explícito: PASSWORD_RECOVERY disparado pelo Supabase na 1ª abertura
       if (event === 'PASSWORD_RECOVERY') {
+        passwordRecoveryStorage.setPending({
+          userId: newSession?.user?.id,
+          email: newSession?.user?.email,
+        })
+        isPasswordRecoveryRef.current = true
         setIsPasswordRecovery(true)
-        setUser(null) // Não autoriza acesso aos módulos corporativos
+        setUser(null) // NUNCA autoriza acesso corporativo
         setAuthError(null)
         setIsLoading(false)
         return
       }
 
-      if (!newSession?.user) {
+      // Se for SIGNED_OUT, limpa tudo e desliga recovery
+      if (event === 'SIGNED_OUT' || !newSession?.user) {
+        passwordRecoveryStorage.clear()
+        isPasswordRecoveryRef.current = false
         setUser(null)
         setIsPasswordRecovery(false)
         setIsLoading(false)
         return
       }
 
-      // Se for SIGNED_OUT
-      if (event === 'SIGNED_OUT') {
-        setUser(null)
-        setIsPasswordRecovery(false)
-        setIsLoading(false)
-        return
-      }
+      // Detecção de recuperação ativa por storage persistido, URL ou flag em memória
+      const pendingInStorage = passwordRecoveryStorage.isPending()
+      const hasUrlParams = passwordRecoveryStorage.hasRecoveryUrlParams()
+      const isRecoveryActive = isPasswordRecoveryRef.current || pendingInStorage || hasUrlParams
 
-      // Se ainda estiver no modo recovery (ou se a URL ainda indicar recovery), não executa cadeia nem desloga
-      if (isPasswordRecovery || urlIndicaRecovery()) {
+      if (isRecoveryActive) {
+        // Assegura que o storage persista a recuperação desta sessão
+        passwordRecoveryStorage.setPending({
+          userId: newSession.user.id,
+          email: newSession.user.email,
+        })
+        isPasswordRecoveryRef.current = true
         setIsPasswordRecovery(true)
-        setUser(null)
+        setUser(null) // Sessão de recovery NUNCA é tratada como login normal
         setIsLoading(false)
         return
       }
 
-      // Se entrou uma nova sessão normal, validar cadeia de autorização
+      // Sessão normal: validar cadeia de autorização corporativa
       validateAccessChain(newSession.user).then((check) => {
         if (!isMounted) return
+        // Dupla checagem: se virou recovery durante a validação assíncrona, ignora login
+        if (isPasswordRecoveryRef.current || passwordRecoveryStorage.isPending()) {
+          setUser(null)
+          setIsLoading(false)
+          return
+        }
+
         if (check.valid && check.contextUser) {
           setUser(check.contextUser)
           setAuthError(null)
@@ -194,11 +209,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
     })
 
-    // Sincronização inicial da sessão
+    // Sincronização inicial da sessão (ex: reload da página ou abertura do link)
     const initializeAuth = async () => {
       try {
-        const isRecoveryUrl = urlIndicaRecovery()
-        if (isRecoveryUrl) {
+        const hasUrlParams = passwordRecoveryStorage.hasRecoveryUrlParams()
+        const pendingInStorage = passwordRecoveryStorage.isPending()
+        const isRecoveryExpected = hasUrlParams || pendingInStorage
+
+        if (isRecoveryExpected) {
+          isPasswordRecoveryRef.current = true
           setIsPasswordRecovery(true)
         }
 
@@ -209,6 +228,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!isMounted) return
 
         if (!initialSession?.user) {
+          // Se não há sessão, mas havia flag no storage, remove flag pois a sessão já expirou
+          if (!hasUrlParams) {
+            passwordRecoveryStorage.clear()
+            isPasswordRecoveryRef.current = false
+            setIsPasswordRecovery(false)
+          }
           setSession(null)
           setAuthUser(null)
           setUser(null)
@@ -219,8 +244,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSession(initialSession)
         setAuthUser(initialSession.user)
 
-        // Se for recuperação pela URL, não validar cadeia corporativa nem encerrar sessão
-        if (isRecoveryUrl) {
+        // Se for recuperação (por storage, URL ou ref), persiste e NUNCA valida cadeia corporativa
+        if (isRecoveryExpected || isPasswordRecoveryRef.current) {
+          passwordRecoveryStorage.setPending({
+            userId: initialSession.user.id,
+            email: initialSession.user.email,
+          })
+          isPasswordRecoveryRef.current = true
           setIsPasswordRecovery(true)
           setUser(null)
           setIsLoading(false)
@@ -229,6 +259,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const check = await validateAccessChain(initialSession.user)
         if (!isMounted) return
+
+        if (isPasswordRecoveryRef.current || passwordRecoveryStorage.isPending()) {
+          setUser(null)
+          setIsLoading(false)
+          return
+        }
 
         if (check.valid && check.contextUser) {
           setUser(check.contextUser)
@@ -260,7 +296,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isMounted = false
       subscription.unsubscribe()
     }
-  }, [validateAccessChain, isPasswordRecovery])
+  }, [validateAccessChain])
 
   const login = async (email: string, password: string) => {
     setAuthError(null)
@@ -318,6 +354,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await supabase.auth.signOut()
     } finally {
+      passwordRecoveryStorage.clear()
+      isPasswordRecoveryRef.current = false
       setUser(null)
       setSession(null)
       setAuthUser(null)
@@ -343,8 +381,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: 'Falha ao redefinir senha no Supabase Auth.' }
       }
 
-      // Encerra a sessão temporária de recuperação por segurança
-      await supabase.auth.signOut()
+      // Encerra a sessão temporária de recuperação por segurança e limpa o estado
+      try {
+        await supabase.auth.signOut()
+      } catch {
+        // Ignora eventual falha de rede no signOut
+      }
+      passwordRecoveryStorage.clear()
+      isPasswordRecoveryRef.current = false
       setIsPasswordRecovery(false)
       setUser(null)
       setSession(null)
@@ -361,6 +405,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await supabase.auth.signOut()
     } finally {
+      passwordRecoveryStorage.clear()
+      isPasswordRecoveryRef.current = false
       setIsPasswordRecovery(false)
       setUser(null)
       setSession(null)

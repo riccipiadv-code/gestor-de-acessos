@@ -37,6 +37,16 @@ export default function LoginPage() {
     }
   }, [isAuthenticated, isPasswordRecovery, navigate])
 
+  if (isPasswordRecovery) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
+        <div className="text-xs text-slate-500 font-medium">
+          Redirecionando para redefinição de senha...
+        </div>
+      </div>
+    )
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError(null)

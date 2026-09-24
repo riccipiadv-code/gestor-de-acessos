@@ -17,8 +17,13 @@ import { useAuth } from '@/lib/data/AuthContext'
 
 export default function RedefinirSenhaPage() {
   const navigate = useNavigate()
-  const { authUser, isPasswordRecovery, atualizarSenhaRecuperacao, cancelarRecuperacaoSenha } =
-    useAuth()
+  const {
+    authUser,
+    isPasswordRecovery,
+    isLoading,
+    atualizarSenhaRecuperacao,
+    cancelarRecuperacaoSenha,
+  } = useAuth()
 
   const [novaSenha, setNovaSenha] = useState('')
   const [confirmacaoSenha, setConfirmacaoSenha] = useState('')
@@ -71,10 +76,13 @@ export default function RedefinirSenhaPage() {
   }
 
   const handleVoltarLogin = async () => {
-    await cancelarRecuperacaoSenha()
+    const eraSucesso = sucesso
+    if (!eraSucesso) {
+      await cancelarRecuperacaoSenha()
+    }
     navigate('/login', {
       replace: true,
-      state: sucesso
+      state: eraSucesso
         ? { mensagemSucesso: 'Senha atualizada com sucesso! Faça login com a sua nova senha.' }
         : undefined,
     })
@@ -158,12 +166,12 @@ export default function RedefinirSenhaPage() {
                 </p>
               </div>
 
-              {!isPasswordRecovery && (
+              {!isLoading && !isPasswordRecovery && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
                   <span>
-                    Aviso: O link de recuperação pode ter expirado ou não foi identificado. Se
-                    encontrar problemas, solicite um novo link na tela de login.
+                    Aviso: Nenhuma sessão ativa de recuperação foi identificada. Se encontrar
+                    problemas ao salvar a nova senha, solicite um novo link na tela de login.
                   </span>
                 </div>
               )}

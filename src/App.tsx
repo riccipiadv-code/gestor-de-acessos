@@ -24,6 +24,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   // Sessão de recuperação de senha NUNCA tem acesso às rotas administrativas
+  // Redireciona imediatamente para a tela de redefinição
   if (isPasswordRecovery) {
     return <Navigate to="/redefinir-senha" replace />
   }
@@ -33,6 +34,29 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>
+}
+
+// Guard da tela de login: se houver recuperação de senha pendente, impede login e força /redefinir-senha
+function LoginRouteGuard() {
+  const { isPasswordRecovery, isAuthenticated, isLoading } = useAuth()
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
+        <div className="text-xs text-slate-500 font-medium">Carregando ambiente seguro...</div>
+      </div>
+    )
+  }
+
+  if (isPasswordRecovery) {
+    return <Navigate to="/redefinir-senha" replace />
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/usuarios" replace />
+  }
+
+  return <LoginPage />
 }
 
 // Raiz: se for recuperação vai para /redefinir-senha, se autenticado vai para /usuarios, senão /login
@@ -65,8 +89,8 @@ const App = () => (
             {/* Rota inicial: redireciona conforme autenticação */}
             <Route path="/" element={<RootRedirect />} />
 
-            {/* Tela de Login */}
-            <Route path="/login" element={<LoginPage />} />
+            {/* Tela de Login protegida contra fluxo de recovery */}
+            <Route path="/login" element={<LoginRouteGuard />} />
 
             {/* Tela dedicada de Redefinição de Senha (link de recuperação do Supabase Auth) */}
             <Route path="/redefinir-senha" element={<RedefinirSenhaPage />} />
