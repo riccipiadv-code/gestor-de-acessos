@@ -176,12 +176,20 @@ export default function UsuariosPage() {
       if (!res.success) {
         throw new Error(res.error || 'Erro ao criar usuário.')
       }
-      toast({
-        title: 'Usuário cadastrado com sucesso',
-        description: dados.send_invite
-          ? 'Usuário criado e convite de acesso enviado por e-mail.'
-          : 'Novo usuário registrado no Gestor de Acesso.',
-      })
+      if (res.warning) {
+        toast({
+          title: 'Usuário cadastrado com ressalva no convite',
+          description: res.warning,
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: 'Usuário cadastrado com sucesso',
+          description: dados.send_invite
+            ? 'Usuário criado e convite de acesso enviado por e-mail.'
+            : 'Novo usuário registrado no Gestor de Acesso.',
+        })
+      }
     }
   }
 

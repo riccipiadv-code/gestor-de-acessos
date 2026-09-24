@@ -165,7 +165,9 @@ class CoreAccessService {
   /**
    * Operações de escrita: TODAS chamam a Edge Function exclusiva `manage-core-user`
    */
-  public async createUsuario(data: CreateUserData): Promise<{ success: boolean; error?: string }> {
+  public async createUsuario(
+    data: CreateUserData,
+  ): Promise<{ success: boolean; error?: string; warning?: string }> {
     try {
       const { data: resData, error } = await supabase.functions.invoke('manage-core-user', {
         body: {
@@ -186,7 +188,10 @@ class CoreAccessService {
         return { success: false, error: resData.error }
       }
 
-      return { success: true }
+      return {
+        success: true,
+        warning: resData?.invite_warning || undefined,
+      }
     } catch (err: unknown) {
       const error = err as Error
       return { success: false, error: error?.message || 'Falha ao cadastrar usuário.' }

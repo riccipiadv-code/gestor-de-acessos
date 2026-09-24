@@ -376,28 +376,7 @@ Deno.serve(async (req: Request) => {
       }
       const sanitizedSistemas: SistemaInput[] = valSistemas.rows || []
 
-      // Opcional: verificar se já existe em auth.users ou enviar convite
-      let linkedAuthUserId: string | null = null
-      const { data: authUsersList } = await adminClient.auth.admin.listUsers({ perPage: 1000 })
-      const existingAuth = (authUsersList?.users || []).find(
-        (u) => u.email?.toLowerCase() === normEmail,
-      )
-
-      if (existingAuth) {
-        linkedAuthUserId = existingAuth.id
-      } else if (send_invite && isAtivo) {
-        // Convite seguro: somente se o usuário estiver ativo
-        const { data: inviteData, error: inviteErr } =
-          await adminClient.auth.admin.inviteUserByEmail(normEmail, {
-            data: { nome: normNome },
-          })
-
-        if (!inviteErr && inviteData?.user?.id) {
-          linkedAuthUserId = inviteData.user.id
-        }
-      }
-
-      // Inserir em core_usuarios
+      // 1. Inserir o registro corporativo em core_usuarios (sem vínculo auth inicial)
       const { data: newUsuario, error: insertUserErr } = await adminClient
         .from('core_usuarios')
         .insert({
@@ -405,7 +384,7 @@ Deno.serve(async (req: Request) => {
           email: normEmail,
           ativo: isAtivo,
           gestor_id: validatedGestorId,
-          auth_user_id: linkedAuthUserId,
+          auth_user_id: null,
         })
         .select()
         .single()
@@ -414,7 +393,7 @@ Deno.serve(async (req: Request) => {
         throw insertUserErr || new Error('Falha ao inserir core_usuarios.')
       }
 
-      // Atribuir acessos via RPC atômica public.core_atualizar_usuario_acessos
+      // 2. Chamar a RPC atômica public.core_atualizar_usuario_acessos
       const acessosPayload = sanitizedSistemas.map((item) => ({
         sistema_id: item.sistema_id,
         perfil_id: item.perfil_id,
@@ -426,19 +405,82 @@ Deno.serve(async (req: Request) => {
       })
 
       if (rpcAcessosErr) {
-        // Reverter inserção do usuário caso a RPC falhe (não permitir usuário com acessos inconsistentes)
-        await adminClient.from('core_usuarios').delete().eq('id', newUsuario.id)
+        // REGRA DE NÃO EXCLUSÃO FÍSICA: NUNCA apagar o usuário.
+        // Deixar o registro sem acessos e inativo, retornar erro claro ao frontend e NÃO disparar convite.
+        await adminClient.from('core_usuarios').update({ ativo: false }).eq('id', newUsuario.id)
+
         return new Response(
           JSON.stringify({
-            error: `Falha ao atribuir acessos do usuário: ${rpcAcessosErr.message}`,
+            error: `Falha ao atribuir acessos do usuário: ${rpcAcessosErr.message}. O usuário foi criado inativo e sem acessos. Nenhum convite foi enviado.`,
+            usuario_id: newUsuario.id,
           }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         )
       }
 
-      return new Response(JSON.stringify({ success: true, usuario: newUsuario }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      // 3. SOMENTE APÓS cadastro e acessos concluídos com sucesso: disparar convite/associar Auth
+      let linkedAuthUserId: string | null = null
+      let inviteWarning: string | null = null
+
+      try {
+        const { data: authUsersList } = await adminClient.auth.admin.listUsers({ perPage: 1000 })
+        const existingAuth = (authUsersList?.users || []).find(
+          (u) => u.email?.toLowerCase() === normEmail,
+        )
+
+        if (existingAuth) {
+          linkedAuthUserId = existingAuth.id
+          await adminClient
+            .from('core_usuarios')
+            .update({ auth_user_id: linkedAuthUserId })
+            .eq('id', newUsuario.id)
+        } else if (send_invite && isAtivo) {
+          // APP_URL seguro vindo de variável de ambiente / segredo (opcional para redirect se existir)
+          const appUrlEnv = Deno.env.get('APP_URL')
+          const APP_URL = appUrlEnv ? appUrlEnv.replace(/\/+$/, '') : null
+          const inviteOptions: { data: { nome: string }; redirectTo?: string } = {
+            data: { nome: normNome },
+          }
+          if (APP_URL) {
+            inviteOptions.redirectTo = `${APP_URL}/login`
+          }
+
+          const { data: inviteData, error: inviteErr } =
+            await adminClient.auth.admin.inviteUserByEmail(normEmail, inviteOptions)
+
+          if (inviteErr) {
+            console.error('Falha ao disparar convite Supabase Auth:', inviteErr)
+            inviteWarning = `Usuário e acessos cadastrados com sucesso, mas o envio do convite falhou: ${inviteErr.message}. Você pode reenviar o convite pela listagem de usuários.`
+          } else if (inviteData?.user?.id) {
+            linkedAuthUserId = inviteData.user.id
+            await adminClient
+              .from('core_usuarios')
+              .update({ auth_user_id: linkedAuthUserId })
+              .eq('id', newUsuario.id)
+          }
+        }
+      } catch (authErr: unknown) {
+        const aErr = authErr as Error
+        console.error('Erro na etapa de associação de Auth/convite:', aErr)
+        inviteWarning = `Usuário e acessos cadastrados com sucesso, mas ocorreu um erro no convite: ${aErr?.message}. Você pode reenviar o convite pela listagem de usuários.`
+      }
+
+      // Obter o registro atualizado de core_usuarios com auth_user_id vinculado (se houver)
+      const { data: finalUsuario } = await adminClient
+        .from('core_usuarios')
+        .select()
+        .eq('id', newUsuario.id)
+        .single()
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          usuario: finalUsuario || newUsuario,
+          invite_sent: Boolean(linkedAuthUserId && !inviteWarning),
+          invite_warning: inviteWarning,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
     }
 
     // =========================================================================

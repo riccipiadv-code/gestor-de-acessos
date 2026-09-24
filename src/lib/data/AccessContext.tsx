@@ -11,7 +11,9 @@ interface AccessContextValue {
   error: string | null
   refresh: () => Promise<void>
   toggleUsuarioAtivo: (id: string) => Promise<{ success: boolean; error?: string; ativo?: boolean }>
-  createUsuario: (data: CreateUserData) => Promise<{ success: boolean; error?: string }>
+  createUsuario: (
+    data: CreateUserData,
+  ) => Promise<{ success: boolean; error?: string; warning?: string }>
   updateUsuario: (id: string, data: UpdateUserData) => Promise<{ success: boolean; error?: string }>
   inviteOuResetSenha: (
     id: string,
