@@ -18,9 +18,12 @@ interface AuthContextValue {
   isAuthenticated: boolean
   isLoading: boolean
   authError: string | null
+  isPasswordRecovery: boolean
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
   logout: () => Promise<void>
   solicitarRecuperacaoSenha: (email: string) => Promise<{ success: boolean; message: string }>
+  atualizarSenhaRecuperacao: (novaSenha: string) => Promise<{ success: boolean; error?: string }>
+  cancelarRecuperacaoSenha: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -31,6 +34,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<AuthContextUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(() => {
+    // Detecta se a URL contém fragmentos de recuperação (#access_token=...&type=recovery)
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash || ''
+      const search = window.location.search || ''
+      return hash.includes('type=recovery') || search.includes('type=recovery')
+    }
+    return false
+  })
 
   // Validação OBRIGATÓRIA da cadeia de autorização:
   // auth.users → core_usuarios pelo auth_user_id → usuário ativo → RPC core_is_gestor_acesso_admin() = true
@@ -117,9 +129,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let isMounted = true
 
-    // Sincronização inicial
+    // Verifica se a URL atual aponta para fluxo de recuperação
+    const urlIndicaRecovery = () => {
+      if (typeof window === 'undefined') return false
+      const hash = window.location.hash || ''
+      const search = window.location.search || ''
+      return hash.includes('type=recovery') || search.includes('type=recovery')
+    }
+
+    // Observador do Supabase Auth (sem async no callback conforme regra do template)
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, newSession) => {
+      setSession(newSession)
+      setAuthUser(newSession?.user ?? null)
+
+      // Evento crítico: PASSWORD_RECOVERY
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true)
+        setUser(null) // Não autoriza acesso aos módulos corporativos
+        setAuthError(null)
+        setIsLoading(false)
+        return
+      }
+
+      if (!newSession?.user) {
+        setUser(null)
+        setIsPasswordRecovery(false)
+        setIsLoading(false)
+        return
+      }
+
+      // Se for SIGNED_OUT
+      if (event === 'SIGNED_OUT') {
+        setUser(null)
+        setIsPasswordRecovery(false)
+        setIsLoading(false)
+        return
+      }
+
+      // Se ainda estiver no modo recovery (ou se a URL ainda indicar recovery), não executa cadeia nem desloga
+      if (isPasswordRecovery || urlIndicaRecovery()) {
+        setIsPasswordRecovery(true)
+        setUser(null)
+        setIsLoading(false)
+        return
+      }
+
+      // Se entrou uma nova sessão normal, validar cadeia de autorização
+      validateAccessChain(newSession.user).then((check) => {
+        if (!isMounted) return
+        if (check.valid && check.contextUser) {
+          setUser(check.contextUser)
+          setAuthError(null)
+        } else {
+          supabase.auth.signOut().then(() => {
+            if (!isMounted) return
+            setUser(null)
+            setSession(null)
+            setAuthError(check.error || 'Acesso não autorizado ao Gestor de Acesso.')
+          })
+        }
+        setIsLoading(false)
+      })
+    })
+
+    // Sincronização inicial da sessão
     const initializeAuth = async () => {
       try {
+        const isRecoveryUrl = urlIndicaRecovery()
+        if (isRecoveryUrl) {
+          setIsPasswordRecovery(true)
+        }
+
         const {
           data: { session: initialSession },
         } = await supabase.auth.getSession()
@@ -137,6 +219,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSession(initialSession)
         setAuthUser(initialSession.user)
 
+        // Se for recuperação pela URL, não validar cadeia corporativa nem encerrar sessão
+        if (isRecoveryUrl) {
+          setIsPasswordRecovery(true)
+          setUser(null)
+          setIsLoading(false)
+          return
+        }
+
         const check = await validateAccessChain(initialSession.user)
         if (!isMounted) return
 
@@ -144,7 +234,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(check.contextUser)
           setAuthError(null)
         } else {
-          // Cadeia falhou: encerra a sessão imediatamente
+          // Cadeia falhou para login normal: encerra a sessão imediatamente
           await supabase.auth.signOut()
           setSession(null)
           setAuthUser(null)
@@ -166,49 +256,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     initializeAuth()
 
-    // Observador do Supabase Auth (sem async no callback conforme regra do template)
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, newSession) => {
-      setSession(newSession)
-      setAuthUser(newSession?.user ?? null)
-
-      if (!newSession?.user) {
-        setUser(null)
-        setIsLoading(false)
-        return
-      }
-
-      // Se for SIGNED_OUT
-      if (event === 'SIGNED_OUT') {
-        setUser(null)
-        setIsLoading(false)
-        return
-      }
-
-      // Se entrou uma nova sessão, validar cadeia
-      validateAccessChain(newSession.user).then((check) => {
-        if (!isMounted) return
-        if (check.valid && check.contextUser) {
-          setUser(check.contextUser)
-          setAuthError(null)
-        } else {
-          supabase.auth.signOut().then(() => {
-            if (!isMounted) return
-            setUser(null)
-            setSession(null)
-            setAuthError(check.error || 'Acesso não autorizado ao Gestor de Acesso.')
-          })
-        }
-        setIsLoading(false)
-      })
-    })
-
     return () => {
       isMounted = false
       subscription.unsubscribe()
     }
-  }, [validateAccessChain])
+  }, [validateAccessChain, isPasswordRecovery])
 
   const login = async (email: string, password: string) => {
     setAuthError(null)
@@ -270,6 +322,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(null)
       setAuthUser(null)
       setAuthError(null)
+      setIsPasswordRecovery(false)
+    }
+  }
+
+  // Atualiza a senha do usuário com a sessão atual de recovery
+  const atualizarSenhaRecuperacao = async (
+    novaSenha: string,
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        password: novaSenha,
+      })
+
+      if (error) {
+        return { success: false, error: error.message }
+      }
+
+      if (!data.user) {
+        return { success: false, error: 'Falha ao redefinir senha no Supabase Auth.' }
+      }
+
+      // Encerra a sessão temporária de recuperação por segurança
+      await supabase.auth.signOut()
+      setIsPasswordRecovery(false)
+      setUser(null)
+      setSession(null)
+      setAuthUser(null)
+
+      return { success: true }
+    } catch (err: unknown) {
+      const e = err as Error
+      return { success: false, error: e?.message || 'Erro inesperado ao atualizar senha.' }
+    }
+  }
+
+  const cancelarRecuperacaoSenha = async () => {
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      setIsPasswordRecovery(false)
+      setUser(null)
+      setSession(null)
+      setAuthUser(null)
     }
   }
 
@@ -308,12 +403,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         session,
         authUser,
-        isAuthenticated: Boolean(user && user.is_admin),
+        isAuthenticated: Boolean(!isPasswordRecovery && user && user.is_admin),
         isLoading,
         authError,
+        isPasswordRecovery,
         login,
         logout,
         solicitarRecuperacaoSenha,
+        atualizarSenhaRecuperacao,
+        cancelarRecuperacaoSenha,
       }}
     >
       {children}

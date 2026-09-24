@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Shield, Lock, Mail, ArrowRight, AlertCircle, Info } from 'lucide-react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { Shield, Lock, Mail, ArrowRight, AlertCircle, Info, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -9,7 +9,8 @@ import { ForgotPasswordModal } from '@/components/ForgotPasswordModal'
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const { login, isAuthenticated, authError } = useAuth()
+  const location = useLocation()
+  const { login, isAuthenticated, isPasswordRecovery, authError } = useAuth()
 
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
@@ -17,12 +18,24 @@ export default function LoginPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [forgotModalOpen, setForgotModalOpen] = useState(false)
 
-  // Se já autenticado com autorização validada, vai direto para /usuarios
+  // Mensagem de sucesso recebida por navegação (ex: após redefinir senha com sucesso)
+  const [sucessoMensagem, setSucessoMensagem] = useState<string | null>(() => {
+    const state = location.state as { mensagemSucesso?: string } | null
+    return state?.mensagemSucesso || null
+  })
+
+  // Se estiver em fluxo de recuperação, direciona para /redefinir-senha
   React.useEffect(() => {
+    if (isPasswordRecovery) {
+      navigate('/redefinir-senha', { replace: true })
+      return
+    }
+
+    // Se já autenticado com autorização corporativa validada, vai direto para /usuarios
     if (isAuthenticated) {
       navigate('/usuarios', { replace: true })
     }
-  }, [isAuthenticated, navigate])
+  }, [isAuthenticated, isPasswordRecovery, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -93,6 +106,13 @@ export default function LoginPage() {
 
           {/* Formulário */}
           <form onSubmit={handleSubmit} className="space-y-4">
+            {sucessoMensagem && !displayedError && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-start gap-2 font-medium">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+                <span>{sucessoMensagem}</span>
+              </div>
+            )}
+
             {displayedError && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2 font-medium">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />

@@ -7,8 +7,6 @@ import {
   Power,
   KeyRound,
   ShieldCheck,
-  ChevronLeft,
-  ChevronRight,
   ShieldAlert,
   RotateCw,
   Eye,
@@ -47,8 +45,6 @@ export default function UsuariosPage() {
 
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'ativos' | 'inativos'>('todos')
-  const [paginaAtual, setPaginaAtual] = useState(1)
-  const itensPorPagina = 10
 
   // Modais
   const [modalUsuarioOpen, setModalUsuarioOpen] = useState(false)
@@ -76,13 +72,6 @@ export default function UsuariosPage() {
       return true
     })
   }, [usuarios, busca, filtroStatus])
-
-  // Paginação simples
-  const totalPaginas = Math.ceil(usuariosFiltrados.length / itensPorPagina) || 1
-  const usuariosPaginados = useMemo(() => {
-    const inicio = (paginaAtual - 1) * itensPorPagina
-    return usuariosFiltrados.slice(inicio, inicio + itensPorPagina)
-  }, [usuariosFiltrados, paginaAtual])
 
   const handleToggleStatus = async (usuario: UsuarioComDetalhes) => {
     // Validação preventiva no frontend: não desativar se for o único admin ativo de GESTOR_ACESSO
@@ -276,40 +265,42 @@ export default function UsuariosPage() {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <Input
             value={busca}
-            onChange={(e) => {
-              setBusca(e.target.value)
-              setPaginaAtual(1)
-            }}
+            onChange={(e) => setBusca(e.target.value)}
             placeholder="Buscar por nome ou e-mail..."
             className="pl-9 text-xs"
           />
         </div>
 
-        {/* Filtro por Status Ativo / Inativo */}
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          <span className="text-xs text-slate-500 font-medium whitespace-nowrap">Status:</span>
-          <Select
-            value={filtroStatus}
-            onValueChange={(val: 'todos' | 'ativos' | 'inativos') => {
-              setFiltroStatus(val)
-              setPaginaAtual(1)
-            }}
-          >
-            <SelectTrigger className="w-[160px] text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos" className="text-xs">
-                Todos ({usuarios.length})
-              </SelectItem>
-              <SelectItem value="ativos" className="text-xs">
-                Ativos ({usuarios.filter((u) => u.ativo).length})
-              </SelectItem>
-              <SelectItem value="inativos" className="text-xs">
-                Inativos ({usuarios.filter((u) => !u.ativo).length})
-              </SelectItem>
-            </SelectContent>
-          </Select>
+        {/* Filtro por Status Ativo / Inativo e Totalizador */}
+        <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500 font-medium whitespace-nowrap">Status:</span>
+            <Select
+              value={filtroStatus}
+              onValueChange={(val: 'todos' | 'ativos' | 'inativos') => {
+                setFiltroStatus(val)
+              }}
+            >
+              <SelectTrigger className="w-[160px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="todos" className="text-xs">
+                  Todos ({usuarios.length})
+                </SelectItem>
+                <SelectItem value="ativos" className="text-xs">
+                  Ativos ({usuarios.filter((u) => u.ativo).length})
+                </SelectItem>
+                <SelectItem value="inativos" className="text-xs">
+                  Inativos ({usuarios.filter((u) => !u.ativo).length})
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="text-xs text-slate-500 font-medium hidden sm:block pl-2 border-l border-slate-200">
+            Total exibido: <strong className="text-slate-800">{usuariosFiltrados.length}</strong>
+          </div>
         </div>
       </div>
 
@@ -359,7 +350,7 @@ export default function UsuariosPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {usuariosPaginados.map((usuario) => {
+                  {usuariosFiltrados.map((usuario) => {
                     const totalSistemas = usuario.sistemasAcesso.length
 
                     return (
@@ -529,47 +520,16 @@ export default function UsuariosPage() {
               </table>
             </div>
 
-            {/* Paginação */}
-            {totalPaginas > 1 && (
-              <div className="p-3.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                <div>
-                  Mostrando{' '}
-                  <span className="font-semibold text-slate-800">
-                    {(paginaAtual - 1) * itensPorPagina + 1}
-                  </span>{' '}
-                  a{' '}
-                  <span className="font-semibold text-slate-800">
-                    {Math.min(paginaAtual * itensPorPagina, usuariosFiltrados.length)}
-                  </span>{' '}
-                  de{' '}
-                  <span className="font-semibold text-slate-800">{usuariosFiltrados.length}</span>{' '}
-                  usuários
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={paginaAtual === 1}
-                    onClick={() => setPaginaAtual((p) => Math.max(p - 1, 1))}
-                    className="h-7 px-2 text-xs"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5 mr-1" /> Anterior
-                  </Button>
-                  <div className="px-2 font-medium text-slate-700">
-                    {paginaAtual} / {totalPaginas}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={paginaAtual === totalPaginas}
-                    onClick={() => setPaginaAtual((p) => Math.min(p + 1, totalPaginas))}
-                    className="h-7 px-2 text-xs"
-                  >
-                    Próxima <ChevronRight className="w-3.5 h-3.5 ml-1" />
-                  </Button>
-                </div>
+            {/* Barra informativa no rodapé da tabela (sem paginação, lista única completa) */}
+            <div className="p-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 bg-slate-50/50">
+              <div>
+                Exibindo{' '}
+                <span className="font-semibold text-slate-800">{usuariosFiltrados.length}</span> de{' '}
+                <span className="font-semibold text-slate-800">{usuarios.length}</span> usuário(s)
+                em lista única
               </div>
-            )}
+              <div className="text-[11px] text-slate-400">Todos os usuários filtrados visíveis</div>
+            </div>
           </>
         )}
       </div>
