@@ -9,15 +9,15 @@ import { ForgotPasswordModal } from '@/components/ForgotPasswordModal'
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const { login, isAuthenticated } = useAuth()
+  const { login, isAuthenticated, authError } = useAuth()
 
-  const [email, setEmail] = useState('antonio.ricci@riccipi.com.br')
+  const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [forgotModalOpen, setForgotModalOpen] = useState(false)
 
-  // Se já autenticado, pode ir direto para Usuários
+  // Se já autenticado com autorização validada, vai direto para /usuarios
   React.useEffect(() => {
     if (isAuthenticated) {
       navigate('/usuarios', { replace: true })
@@ -26,11 +26,16 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError(null)
+    setFormError(null)
 
     const cleanEmail = email.trim()
     if (!cleanEmail) {
-      setError('Por favor, informe seu e-mail institucional.')
+      setFormError('Por favor, informe seu e-mail corporativo.')
+      return
+    }
+
+    if (!senha) {
+      setFormError('Por favor, informe sua senha.')
       return
     }
 
@@ -40,16 +45,18 @@ export default function LoginPage() {
       if (res.success) {
         navigate('/usuarios', { replace: true })
       } else {
-        setError(res.error || 'Não foi possível realizar o login.')
+        setFormError(res.error || 'Não foi possível realizar o login.')
       }
     } finally {
       setLoading(false)
     }
   }
 
+  const displayedError = formError || authError
+
   return (
     <div className="min-h-screen bg-[#F5F7FA] text-[#1F2937] flex flex-col justify-between antialiased">
-      {/* Top Simple Bar */}
+      {/* Barra Superior Simples */}
       <header className="h-16 border-b border-slate-200 bg-white px-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#1B4E8C] to-[#0E7C7B] flex items-center justify-center shadow-xs">
@@ -69,26 +76,27 @@ export default function LoginPage() {
         </div>
       </header>
 
-      {/* Main Login Card */}
+      {/* Cartão de Login */}
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
         <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-sm p-6 sm:p-8 space-y-6">
-          {/* Card Header */}
+          {/* Cabeçalho */}
           <div className="space-y-1 text-center">
             <div className="inline-flex w-12 h-12 rounded-xl bg-blue-50 text-[#1B4E8C] items-center justify-center mb-2">
               <Lock className="w-6 h-6" />
             </div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Acesso ao Sistema</h1>
             <p className="text-xs text-slate-500">
-              Entre com suas credenciais corporativas para gerenciar identidades e acessos.
+              Entre com suas credenciais corporativas do Supabase Auth para gerenciar identidades e
+              acessos.
             </p>
           </div>
 
-          {/* Form */}
+          {/* Formulário */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-2 font-medium">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
+            {displayedError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2 font-medium">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{displayedError}</span>
               </div>
             )}
 
@@ -136,11 +144,12 @@ export default function LoginPage() {
                   placeholder="••••••••••••"
                   className="pl-9 text-xs"
                   autoComplete="current-password"
+                  required
                 />
               </div>
             </div>
 
-            {/* Submit Button */}
+            {/* Botão Entrar */}
             <Button
               type="submit"
               disabled={loading}
@@ -157,15 +166,15 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* Security Architecture Note */}
+          {/* Nota de Segurança Corporativa */}
           <div className="pt-4 border-t border-slate-100">
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-start gap-2.5 text-[11px] text-slate-600">
               <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
               <div className="space-y-0.5 leading-relaxed">
-                <span className="font-semibold text-slate-800">Ambiente Corporativo Seguro:</span>
+                <span className="font-semibold text-slate-800">Autenticação Centralizada:</span>
                 <p>
-                  A autenticação definitiva será delegada ao Supabase Auth (auth.users). Nenhuma
-                  senha é armazenada ou mantida na camada de interface.
+                  O acesso requer vínculo ativo em <code>core_usuarios</code> e perfil de
+                  Administrador no sistema Gestor de Acesso.
                 </p>
               </div>
             </div>
@@ -173,7 +182,7 @@ export default function LoginPage() {
         </div>
       </main>
 
-      {/* Footer */}
+      {/* Rodapé */}
       <footer className="h-12 border-t border-slate-200 bg-white px-6 flex items-center justify-between text-xs text-slate-500">
         <div>
           © {new Date().getFullYear()} <span className="font-semibold text-slate-700">Ricci</span> —

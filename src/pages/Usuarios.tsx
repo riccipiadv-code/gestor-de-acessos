@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Users,
   Search,
@@ -10,6 +10,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldAlert,
+  RotateCw,
+  Eye,
 } from 'lucide-react'
 import { useAccess } from '@/lib/data/AccessContext'
 import { Button } from '@/components/ui/button'
@@ -30,8 +32,17 @@ import { ResetPasswordModal } from '@/components/ResetPasswordModal'
 import type { UsuarioComDetalhes } from '@/lib/data/types'
 
 export default function UsuariosPage() {
-  const { usuarios, sistemas, perfis, toggleUsuarioAtivo, createUsuario, updateUsuario } =
-    useAccess()
+  const {
+    usuarios,
+    sistemas,
+    perfis,
+    loading,
+    error,
+    refresh,
+    toggleUsuarioAtivo,
+    createUsuario,
+    updateUsuario,
+  } = useAccess()
   const { toast } = useToast()
 
   const [busca, setBusca] = useState('')
@@ -52,11 +63,9 @@ export default function UsuariosPage() {
   // Filtragem: busca por Nome ou E-mail e filtro Ativo/Inativo
   const usuariosFiltrados = useMemo(() => {
     return usuarios.filter((usuario) => {
-      // Filtro de status
       if (filtroStatus === 'ativos' && !usuario.ativo) return false
       if (filtroStatus === 'inativos' && usuario.ativo) return false
 
-      // Busca por nome ou email
       if (busca.trim()) {
         const termo = busca.toLowerCase()
         const bateuNome = usuario.nome.toLowerCase().includes(termo)
@@ -75,17 +84,25 @@ export default function UsuariosPage() {
     return usuariosFiltrados.slice(inicio, inicio + itensPorPagina)
   }, [usuariosFiltrados, paginaAtual])
 
-  const handleToggleStatus = (usuario: UsuarioComDetalhes) => {
-    const novoStatus = toggleUsuarioAtivo(usuario.id)
-    if (novoStatus) {
-      toast({
-        title: 'Usuário ativado',
-        description: `${usuario.nome} agora possui acesso corporativo normal.`,
-      })
+  const handleToggleStatus = async (usuario: UsuarioComDetalhes) => {
+    const res = await toggleUsuarioAtivo(usuario.id)
+    if (res.success) {
+      if (res.ativo) {
+        toast({
+          title: 'Usuário ativado',
+          description: `${usuario.nome} agora possui acesso corporativo normal.`,
+        })
+      } else {
+        toast({
+          title: 'Usuário desativado',
+          description: `${usuario.nome} foi desativado. Todos os acessos aos sistemas foram bloqueados.`,
+          variant: 'destructive',
+        })
+      }
     } else {
       toast({
-        title: 'Usuário desativado',
-        description: `${usuario.nome} foi desativado. Todos os acessos aos sistemas foram bloqueados.`,
+        title: 'Erro ao alterar status',
+        description: res.error || 'Falha ao atualizar o usuário.',
         variant: 'destructive',
       })
     }
@@ -102,7 +119,6 @@ export default function UsuariosPage() {
   }
 
   const handleOpenGerenciarAcessos = (usuario: UsuarioComDetalhes) => {
-    // Abre a experiência centralizada de cadastro/edição na aba/seção de sistemas
     setUsuarioEmEdicao(usuario)
     setModalUsuarioOpen(true)
   }
@@ -117,18 +133,33 @@ export default function UsuariosPage() {
     setModalResetSenhaOpen(true)
   }
 
-  const handleSaveUsuario = (dados: Parameters<typeof createUsuario>[0]) => {
+  const handleSaveUsuario = async (dados: {
+    nome: string
+    email: string
+    ativo: boolean
+    gestor_id: string | null
+    sistemas: { sistema_id: string; perfil_id: string }[]
+    send_invite?: boolean
+  }) => {
     if (usuarioEmEdicao) {
-      updateUsuario(usuarioEmEdicao.id, dados)
+      const res = await updateUsuario(usuarioEmEdicao.id, dados)
+      if (!res.success) {
+        throw new Error(res.error || 'Erro ao atualizar usuário.')
+      }
       toast({
         title: 'Usuário atualizado com sucesso',
         description: 'Os dados cadastrais e acessos aos sistemas foram salvos.',
       })
     } else {
-      createUsuario(dados)
+      const res = await createUsuario(dados)
+      if (!res.success) {
+        throw new Error(res.error || 'Erro ao criar usuário.')
+      }
       toast({
-        title: 'Usuário criado com sucesso',
-        description: 'Novo usuário registrado no Gestor de Acesso.',
+        title: 'Usuário cadastrado com sucesso',
+        description: dados.send_invite
+          ? 'Usuário criado e convite de acesso enviado por e-mail.'
+          : 'Novo usuário registrado no Gestor de Acesso.',
       })
     }
   }
@@ -153,14 +184,42 @@ export default function UsuariosPage() {
             corporativos
           </p>
         </div>
-        <Button
-          onClick={handleOpenCriar}
-          className="bg-[#1B4E8C] hover:bg-[#163F73] text-white text-xs font-semibold shadow-xs"
-        >
-          <Plus className="w-4 h-4 mr-1.5" />
-          Novo Usuário
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refresh()}
+            disabled={loading}
+            className="text-xs h-9"
+            title="Atualizar lista"
+          >
+            <RotateCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
+            Atualizar
+          </Button>
+          <Button
+            onClick={handleOpenCriar}
+            className="bg-[#1B4E8C] hover:bg-[#163F73] text-white text-xs font-semibold shadow-xs h-9"
+          >
+            <Plus className="w-4 h-4 mr-1.5" />
+            Novo Usuário
+          </Button>
+        </div>
       </div>
+
+      {/* Alerta de erro de carregamento se houver */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-800 flex items-center justify-between">
+          <span>{error}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => refresh()}
+            className="text-xs text-red-900"
+          >
+            Tentar novamente
+          </Button>
+        </div>
+      )}
 
       {/* Regra de Desativação e Segurança */}
       <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 flex items-center justify-between gap-3 text-xs text-amber-900">
@@ -204,7 +263,7 @@ export default function UsuariosPage() {
               setPaginaAtual(1)
             }}
           >
-            <SelectTrigger className="w-[150px] text-xs">
+            <SelectTrigger className="w-[160px] text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -224,7 +283,14 @@ export default function UsuariosPage() {
 
       {/* Tabela Principal: Nome, E-mail, Gestor, Status, Acessos, Ações */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-        {usuariosFiltrados.length === 0 ? (
+        {loading && usuarios.length === 0 ? (
+          <div className="py-16 text-center space-y-2">
+            <RotateCw className="w-6 h-6 animate-spin text-[#1B4E8C] mx-auto" />
+            <p className="text-xs text-slate-500 font-medium">
+              Carregando usuários corporativos...
+            </p>
+          </div>
+        ) : usuariosFiltrados.length === 0 ? (
           <div className="py-16 px-4 text-center space-y-3">
             <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
               <Users className="w-6 h-6" />
@@ -279,9 +345,20 @@ export default function UsuariosPage() {
                                 {getInitials(usuario.nome)}
                               </AvatarFallback>
                             </Avatar>
-                            <span className="font-semibold text-slate-900 text-xs sm:text-sm">
-                              {usuario.nome}
-                            </span>
+                            <div>
+                              <span className="font-semibold text-slate-900 text-xs sm:text-sm block">
+                                {usuario.nome}
+                              </span>
+                              {usuario.auth_user_id ? (
+                                <span className="text-[10px] text-emerald-600 font-medium">
+                                  Auth vinculado
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-amber-600 font-medium">
+                                  Auth pendente
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </td>
 
@@ -341,10 +418,21 @@ export default function UsuariosPage() {
                           )}
                         </td>
 
-                        {/* Ações previstas: Editar, Ativar/Desativar, Gerenciar acessos, Redefinir senha */}
+                        {/* Ações previstas */}
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {/* Gerenciar Acessos (Abre cadastro/edição focado nos sistemas) */}
+                            {/* Visualizar detalhes */}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleOpenVisualizarAcessos(usuario)}
+                              className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+                              title="Visualizar detalhes do usuário e acessos"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+
+                            {/* Gerenciar Acessos */}
                             <Button
                               variant="ghost"
                               size="sm"
@@ -367,13 +455,17 @@ export default function UsuariosPage() {
                               <Edit2 className="w-4 h-4" />
                             </Button>
 
-                            {/* Redefinir Senha */}
+                            {/* Ação de Senha (convite ou reset) */}
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => handleOpenResetSenha(usuario)}
                               className="h-8 w-8 p-0 text-slate-600 hover:text-amber-700 hover:bg-amber-50"
-                              title="Redefinir senha do usuário (Supabase Auth)"
+                              title={
+                                usuario.auth_user_id
+                                  ? 'Redefinir senha via Supabase Auth'
+                                  : 'Enviar convite de primeiro acesso'
+                              }
                             >
                               <KeyRound className="w-4 h-4" />
                             </Button>
@@ -450,7 +542,7 @@ export default function UsuariosPage() {
         )}
       </div>
 
-      {/* Modal Único de Cadastro / Edição com Seção "Acesso aos Sistemas" */}
+      {/* Modal Único de Cadastro / Edição */}
       <UserModal
         open={modalUsuarioOpen}
         onOpenChange={setModalUsuarioOpen}
@@ -468,7 +560,7 @@ export default function UsuariosPage() {
         usuario={usuarioVisualizado}
       />
 
-      {/* Modal Administrativo de Redefinição de Senha */}
+      {/* Modal Administrativo de Senha / Convite */}
       <ResetPasswordModal
         open={modalResetSenhaOpen}
         onOpenChange={setModalResetSenhaOpen}

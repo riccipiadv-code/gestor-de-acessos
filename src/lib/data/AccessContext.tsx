@@ -1,66 +1,110 @@
-import React, { createContext, useContext, useEffect, useState, useTransition } from 'react'
-import { accessService } from './accessService'
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { coreAccessService, type CreateUserData, type UpdateUserData } from './accessService'
+import { useAuth } from './AuthContext'
 import type { UsuarioComDetalhes, SistemaComEstatisticas, PerfilComEstatisticas } from './types'
 
 interface AccessContextValue {
   usuarios: UsuarioComDetalhes[]
   sistemas: SistemaComEstatisticas[]
   perfis: PerfilComEstatisticas[]
-  refresh: () => void
-  // Métodos expostos
-  toggleUsuarioAtivo: (id: string) => boolean
-  createUsuario: (data: Parameters<typeof accessService.createUsuario>[0]) => void
-  updateUsuario: (id: string, data: Parameters<typeof accessService.updateUsuario>[1]) => void
-  toggleSistemaAtivo: (id: string) => boolean
-  createSistema: (data: Parameters<typeof accessService.createSistema>[0]) => void
-  updateSistema: (id: string, data: Parameters<typeof accessService.updateSistema>[1]) => void
-  togglePerfilAtivo: (id: string) => boolean
-  createPerfil: (data: Parameters<typeof accessService.createPerfil>[0]) => void
-  updatePerfil: (id: string, data: Parameters<typeof accessService.updatePerfil>[1]) => void
+  loading: boolean
+  error: string | null
+  refresh: () => Promise<void>
+  toggleUsuarioAtivo: (id: string) => Promise<{ success: boolean; error?: string; ativo?: boolean }>
+  createUsuario: (data: CreateUserData) => Promise<{ success: boolean; error?: string }>
+  updateUsuario: (id: string, data: UpdateUserData) => Promise<{ success: boolean; error?: string }>
+  inviteOuResetSenha: (
+    id: string,
+  ) => Promise<{ success: boolean; message?: string; error?: string }>
 }
 
 const AccessContext = createContext<AccessContextValue | null>(null)
 
 export const AccessProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [, startTransition] = useTransition()
-  const [usuarios, setUsuarios] = useState<UsuarioComDetalhes[]>(() => accessService.listUsuarios())
-  const [sistemas, setSistemas] = useState<SistemaComEstatisticas[]>(() =>
-    accessService.listSistemas(),
-  )
-  const [perfis, setPerfis] = useState<PerfilComEstatisticas[]>(() => accessService.listPerfis())
+  const { isAuthenticated } = useAuth()
+  const [usuarios, setUsuarios] = useState<UsuarioComDetalhes[]>([])
+  const [sistemas, setSistemas] = useState<SistemaComEstatisticas[]>([])
+  const [perfis, setPerfis] = useState<PerfilComEstatisticas[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const loadAll = () => {
-    startTransition(() => {
-      setUsuarios(accessService.listUsuarios())
-      setSistemas(accessService.listSistemas())
-      setPerfis(accessService.listPerfis())
-    })
-  }
+  const loadData = useCallback(async () => {
+    if (!isAuthenticated) {
+      setUsuarios([])
+      setSistemas([])
+      setPerfis([])
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await coreAccessService.loadAll()
+      if (res.error) {
+        setError(res.error)
+      } else {
+        setUsuarios(res.usuarios)
+        setSistemas(res.sistemas)
+        setPerfis(res.perfis)
+      }
+    } catch (err: unknown) {
+      const e = err as Error
+      setError(e?.message || 'Falha ao carregar dados.')
+    } finally {
+      setLoading(false)
+    }
+  }, [isAuthenticated])
 
   useEffect(() => {
-    const unsubscribe = accessService.subscribe(() => {
-      loadAll()
-    })
-    return () => unsubscribe()
-  }, [])
+    loadData()
+  }, [loadData])
 
-  const value: AccessContextValue = {
-    usuarios,
-    sistemas,
-    perfis,
-    refresh: loadAll,
-    toggleUsuarioAtivo: (id: string) => accessService.toggleUsuarioAtivo(id),
-    createUsuario: (data) => accessService.createUsuario(data),
-    updateUsuario: (id, data) => accessService.updateUsuario(id, data),
-    toggleSistemaAtivo: (id: string) => accessService.toggleSistemaAtivo(id),
-    createSistema: (data) => accessService.createSistema(data),
-    updateSistema: (id, data) => accessService.updateSistema(id, data),
-    togglePerfilAtivo: (id: string) => accessService.togglePerfilAtivo(id),
-    createPerfil: (data) => accessService.createPerfil(data),
-    updatePerfil: (id, data) => accessService.updatePerfil(id, data),
+  const toggleUsuarioAtivo = async (id: string) => {
+    const res = await coreAccessService.toggleUsuarioAtivo(id)
+    if (res.success) {
+      await loadData()
+    }
+    return res
   }
 
-  return <AccessContext.Provider value={value}>{children}</AccessContext.Provider>
+  const createUsuario = async (data: CreateUserData) => {
+    const res = await coreAccessService.createUsuario(data)
+    if (res.success) {
+      await loadData()
+    }
+    return res
+  }
+
+  const updateUsuario = async (id: string, data: UpdateUserData) => {
+    const res = await coreAccessService.updateUsuario(id, data)
+    if (res.success) {
+      await loadData()
+    }
+    return res
+  }
+
+  const inviteOuResetSenha = async (id: string) => {
+    return await coreAccessService.inviteOuResetSenha(id)
+  }
+
+  return (
+    <AccessContext.Provider
+      value={{
+        usuarios,
+        sistemas,
+        perfis,
+        loading,
+        error,
+        refresh: loadData,
+        toggleUsuarioAtivo,
+        createUsuario,
+        updateUsuario,
+        inviteOuResetSenha,
+      }}
+    >
+      {children}
+    </AccessContext.Provider>
+  )
 }
 
 export function useAccess() {

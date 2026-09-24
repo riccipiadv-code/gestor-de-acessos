@@ -10,14 +10,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import {
-  ShieldCheck,
-  ShieldAlert,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Layers,
-} from 'lucide-react'
+import { ShieldCheck, ShieldAlert, CheckCircle2, XCircle, Layers } from 'lucide-react'
 import type { UsuarioComDetalhes } from '@/lib/data/types'
 
 interface ViewAccessModalProps {
@@ -97,15 +90,13 @@ export function ViewAccessModal({ open, onOpenChange, usuario }: ViewAccessModal
             </div>
           </div>
 
-          {/* Vínculo LegalDesk */}
-          {usuario.legaldesk_usuario_id && (
-            <div className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 flex items-center justify-between">
-              <span className="font-medium">Identificador LegalDesk:</span>
-              <span className="font-mono font-semibold text-slate-800">
-                {usuario.legaldesk_usuario_id}
-              </span>
-            </div>
-          )}
+          {/* Vínculo Supabase Auth */}
+          <div className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 flex items-center justify-between">
+            <span className="font-medium">Identificador Supabase Auth (auth_user_id):</span>
+            <span className="font-mono text-[11px] font-semibold text-slate-800">
+              {usuario.auth_user_id || 'Não vinculado ao Auth'}
+            </span>
+          </div>
 
           {/* Lista de Acessos aos Sistemas */}
           <div className="space-y-2">
@@ -152,7 +143,7 @@ export function ViewAccessModal({ open, onOpenChange, usuario }: ViewAccessModal
                         ) : (
                           <Badge className="bg-red-50 text-red-700 border-red-200 hover:bg-red-50 text-[11px] flex items-center gap-1">
                             <XCircle className="w-3 h-3" />
-                            Sem acesso — usuário inativo
+                            Sem acesso — inativo
                           </Badge>
                         )}
                       </div>

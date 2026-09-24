@@ -1,19 +1,4 @@
-// Camada de Serviços Abstrata — Gestor de Acesso Ricci
-//
-// AVISO DE ARQUITETURA:
-// Substituir esta camada de mock por queries Supabase reais (ex.: supabase.from('core_usuarios')...)
-// quando as tabelas centrais do schema public forem criadas no banco de dados.
-//
-// Regra de segurança fundamental:
-// Usuário inativo (ativo = false) NÃO acessa nenhum sistema corporativo.
-// O acesso efetivo sempre requer: usuario.ativo === true AND usuario_sistema.ativo === true AND sistema.ativo === true.
-
-import {
-  INITIAL_USUARIOS,
-  INITIAL_SISTEMAS,
-  INITIAL_PERFIS,
-  INITIAL_USUARIO_SISTEMAS,
-} from './mockData'
+import { supabase } from '@/lib/supabase/client'
 import type {
   CoreUsuario,
   CoreSistema,
@@ -24,424 +9,270 @@ import type {
   PerfilComEstatisticas,
 } from './types'
 
-type Listener = () => void
+export interface CreateUserData {
+  nome: string
+  email: string
+  ativo: boolean
+  gestor_id: string | null
+  sistemas: { sistema_id: string; perfil_id: string }[]
+  send_invite?: boolean
+}
 
-class AccessStore {
-  private usuarios: CoreUsuario[] = [...INITIAL_USUARIOS]
-  private sistemas: CoreSistema[] = [...INITIAL_SISTEMAS]
-  private perfis: CorePerfil[] = [...INITIAL_PERFIS]
-  private usuarioSistemas: CoreUsuarioSistema[] = [...INITIAL_USUARIO_SISTEMAS]
-  private listeners: Set<Listener> = new Set()
+export interface UpdateUserData {
+  nome: string
+  email: string
+  ativo: boolean
+  gestor_id: string | null
+  sistemas: { sistema_id: string; perfil_id: string }[]
+}
 
-  private notify() {
-    this.listeners.forEach((listener) => {
-      try {
-        listener()
-      } catch (err) {
-        console.error('Erro no listener da AccessStore:', err)
-      }
-    })
-  }
+class CoreAccessService {
+  /**
+   * Busca completa dos dados diretamente das tabelas core_* com a sessão do usuário.
+   * RLS ativo: core_usuarios_leitura_propria_ou_admin, core_sistemas_leitura_autenticado,
+   * core_perfis_leitura_autenticado, core_usuario_sistemas_leitura_propria_ou_admin.
+   */
+  public async loadAll(): Promise<{
+    usuarios: UsuarioComDetalhes[]
+    sistemas: SistemaComEstatisticas[]
+    perfis: PerfilComEstatisticas[]
+    error?: string
+  }> {
+    try {
+      // 1. Carrega sistemas
+      const { data: sistemasData, error: sisErr } = await supabase
+        .from('core_sistemas')
+        .select('*')
+        .order('nome', { ascending: true })
 
-  public subscribe(listener: Listener): () => void {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
+      if (sisErr) throw sisErr
+      const sistemas = (sistemasData || []) as CoreSistema[]
 
-  // ===================== USUÁRIOS =====================
+      // 2. Carrega perfis
+      const { data: perfisData, error: perfErr } = await supabase
+        .from('core_perfis')
+        .select('*')
+        .order('nome', { ascending: true })
 
-  public listUsuarios(): UsuarioComDetalhes[] {
-    const usuariosMap = new Map(this.usuarios.map((u) => [u.id, u]))
-    const sistemasMap = new Map(this.sistemas.map((s) => [s.id, s]))
-    const perfisMap = new Map(this.perfis.map((p) => [p.id, p]))
+      if (perfErr) throw perfErr
+      const perfis = (perfisData || []) as CorePerfil[]
 
-    return this.usuarios.map((usuario) => {
-      const gestor = usuario.gestor_id ? usuariosMap.get(usuario.gestor_id) : null
+      // 3. Carrega usuários
+      const { data: usuariosData, error: userErr } = await supabase
+        .from('core_usuarios')
+        .select('*')
+        .order('nome', { ascending: true })
 
-      const acessos = this.usuarioSistemas
-        .filter((us) => us.usuario_id === usuario.id)
-        .map((us) => {
-          const sistema = sistemasMap.get(us.sistema_id)
-          const perfil = perfisMap.get(us.perfil_id)
-          const sistemaAtivo = sistema?.ativo ?? false
-          // Regra de desligamento: se usuário inativo, não tem acesso efetivo a nenhum sistema
-          const acessoEfetivo = usuario.ativo && us.ativo && sistemaAtivo
+      if (userErr) throw userErr
+      const usuarios = (usuariosData || []) as CoreUsuario[]
 
-          return {
-            sistemaId: us.sistema_id,
-            sistemaCodigo: sistema?.codigo || 'N/D',
-            sistemaNome: sistema?.nome || 'Sistema Desconhecido',
-            perfilId: us.perfil_id,
-            perfilNome: perfil?.nome || 'Perfil Não Definido',
-            perfilCodigo: perfil?.codigo || 'N/D',
-            ativo: us.ativo,
-            acessoEfetivo,
-          }
-        })
+      // 4. Carrega acessos de usuários
+      const { data: usuarioSistemasData, error: usErr } = await supabase
+        .from('core_usuario_sistemas')
+        .select('*')
 
-      return {
-        ...usuario,
-        gestorNome: gestor ? gestor.nome : null,
-        sistemasAcesso: acessos,
-      }
-    })
-  }
+      if (usErr) throw usErr
+      const usuarioSistemas = (usuarioSistemasData || []) as CoreUsuarioSistema[]
 
-  public getUsuarioById(id: string): UsuarioComDetalhes | null {
-    const todos = this.listUsuarios()
-    return todos.find((u) => u.id === id) || null
-  }
+      // Mapeamento rápido
+      const usuariosMap = new Map(usuarios.map((u) => [u.id, u]))
+      const sistemasMap = new Map(sistemas.map((s) => [s.id, s]))
+      const perfisMap = new Map(perfis.map((p) => [p.id, p]))
 
-  public createUsuario(data: {
-    nome: string
-    email: string
-    ativo: boolean
-    gestor_id: string | null
-    legaldesk_usuario_id?: string | null
-    sistemas: { sistema_id: string; perfil_id: string }[]
-  }): CoreUsuario {
-    const now = new Date().toISOString()
-    const novoUsuario: CoreUsuario = {
-      id: `usr-${Date.now()}`,
-      auth_user_id: null, // Será preenchido na integração com Supabase auth.users
-      nome: data.nome.trim(),
-      email: data.email.trim().toLowerCase(),
-      ativo: data.ativo,
-      gestor_id: data.gestor_id || null,
-      legaldesk_usuario_id: data.legaldesk_usuario_id ? data.legaldesk_usuario_id.trim() : null,
-      created_at: now,
-      updated_at: now,
-    }
+      // Usuários com detalhes (gestorNome e sistemasAcesso)
+      const usuariosComDetalhes: UsuarioComDetalhes[] = usuarios.map((usuario) => {
+        const gestor = usuario.gestor_id ? usuariosMap.get(usuario.gestor_id) : null
 
-    this.usuarios.unshift(novoUsuario)
+        const acessos = usuarioSistemas
+          .filter((us) => us.usuario_id === usuario.id)
+          .map((us) => {
+            const sistema = sistemasMap.get(us.sistema_id)
+            const perfil = perfisMap.get(us.perfil_id)
+            const sistemaAtivo = sistema?.ativo ?? false
+            // Regra corporativa: usuário inativo bloqueia acesso universalmente
+            const acessoEfetivo = usuario.ativo && us.ativo && sistemaAtivo
 
-    // Cadastra vínculos de sistema com perfis
-    data.sistemas.forEach((item, index) => {
-      this.usuarioSistemas.push({
-        id: `us-${Date.now()}-${index}`,
-        usuario_id: novoUsuario.id,
-        sistema_id: item.sistema_id,
-        perfil_id: item.perfil_id,
-        ativo: true,
-        created_at: now,
-        updated_at: now,
+            return {
+              sistemaId: us.sistema_id,
+              sistemaCodigo: sistema?.codigo || 'N/D',
+              sistemaNome: sistema?.nome || 'Sistema Desconhecido',
+              perfilId: us.perfil_id,
+              perfilNome: perfil?.nome || 'Perfil Não Definido',
+              perfilCodigo: perfil?.codigo || 'N/D',
+              ativo: us.ativo,
+              acessoEfetivo,
+            }
+          })
+
+        return {
+          ...usuario,
+          gestorNome: gestor ? gestor.nome : null,
+          sistemasAcesso: acessos,
+        }
       })
-    })
 
-    this.notify()
-    return novoUsuario
-  }
+      // Sistemas com estatísticas
+      const sistemasComEstatisticas: SistemaComEstatisticas[] = sistemas.map((sistema) => {
+        const totalUsuariosAcesso = usuarioSistemas.filter((us) => {
+          if (us.sistema_id !== sistema.id || !us.ativo) return false
+          const u = usuariosMap.get(us.usuario_id)
+          return u && u.ativo
+        }).length
 
-  public updateUsuario(
-    id: string,
-    data: {
-      nome: string
-      email: string
-      ativo: boolean
-      gestor_id: string | null
-      legaldesk_usuario_id?: string | null
-      sistemas: { sistema_id: string; perfil_id: string }[]
-    },
-  ): CoreUsuario {
-    const index = this.usuarios.findIndex((u) => u.id === id)
-    if (index === -1) {
-      throw new Error('Usuário não encontrado')
-    }
+        const totalPerfis = perfis.filter((p) => p.sistema_id === sistema.id).length
 
-    const now = new Date().toISOString()
-    const usuarioAtualizado: CoreUsuario = {
-      ...this.usuarios[index],
-      nome: data.nome.trim(),
-      email: data.email.trim().toLowerCase(),
-      ativo: data.ativo,
-      gestor_id: data.gestor_id || null,
-      legaldesk_usuario_id: data.legaldesk_usuario_id ? data.legaldesk_usuario_id.trim() : null,
-      updated_at: now,
-    }
-
-    this.usuarios[index] = usuarioAtualizado
-
-    // Atualiza vínculos de sistemas (remove os existentes desse usuário e recria com os perfis atualizados)
-    this.usuarioSistemas = this.usuarioSistemas.filter((us) => us.usuario_id !== id)
-    data.sistemas.forEach((item, idx) => {
-      this.usuarioSistemas.push({
-        id: `us-${Date.now()}-${idx}`,
-        usuario_id: id,
-        sistema_id: item.sistema_id,
-        perfil_id: item.perfil_id,
-        ativo: true,
-        created_at: now,
-        updated_at: now,
+        return {
+          ...sistema,
+          totalUsuariosAcesso,
+          totalPerfis,
+        }
       })
-    })
 
-    this.notify()
-    return usuarioAtualizado
-  }
+      // Perfis com estatísticas
+      const perfisComEstatisticas: PerfilComEstatisticas[] = perfis.map((perfil) => {
+        const sis = sistemasMap.get(perfil.sistema_id)
+        const totalUsuarios = usuarioSistemas.filter((us) => {
+          if (us.perfil_id !== perfil.id || !us.ativo) return false
+          const u = usuariosMap.get(us.usuario_id)
+          return u && u.ativo
+        }).length
 
-  public toggleUsuarioAtivo(id: string): boolean {
-    const index = this.usuarios.findIndex((u) => u.id === id)
-    if (index === -1) return false
-
-    const novoStatus = !this.usuarios[index].ativo
-    this.usuarios[index] = {
-      ...this.usuarios[index],
-      ativo: novoStatus,
-      updated_at: new Date().toISOString(),
-    }
-
-    this.notify()
-    return novoStatus
-  }
-
-  // ===================== SISTEMAS =====================
-
-  public listSistemas(): SistemaComEstatisticas[] {
-    return this.sistemas.map((sistema) => {
-      // Usuários que têm acesso a este sistema E estão ativos
-      const usuariosComAcesso = this.usuarioSistemas.filter((us) => {
-        if (us.sistema_id !== sistema.id || !us.ativo) return false
-        const usuario = this.usuarios.find((u) => u.id === us.usuario_id)
-        return usuario && usuario.ativo
-      }).length
-
-      const totalPerfis = this.perfis.filter((p) => p.sistema_id === sistema.id).length
+        return {
+          ...perfil,
+          sistemaNome: sis?.nome || 'Sistema Desconhecido',
+          sistemaCodigo: sis?.codigo || 'N/D',
+          totalUsuarios,
+        }
+      })
 
       return {
-        ...sistema,
-        totalUsuariosAcesso: usuariosComAcesso,
-        totalPerfis,
+        usuarios: usuariosComDetalhes,
+        sistemas: sistemasComEstatisticas,
+        perfis: perfisComEstatisticas,
       }
-    })
-  }
-
-  public createSistema(data: {
-    codigo: string
-    nome: string
-    descricao: string
-    ativo: boolean
-  }): CoreSistema {
-    const now = new Date().toISOString()
-    const novoSistema: CoreSistema = {
-      id: `sis-${Date.now()}`,
-      codigo: data.codigo.trim().toUpperCase().replace(/\s+/g, '_'),
-      nome: data.nome.trim(),
-      descricao: data.descricao.trim(),
-      ativo: data.ativo,
-      created_at: now,
-      updated_at: now,
+    } catch (err: unknown) {
+      const error = err as Error
+      console.error('Erro ao carregar dados do core:', error)
+      return {
+        usuarios: [],
+        sistemas: [],
+        perfis: [],
+        error: error?.message || 'Erro ao carregar dados do banco.',
+      }
     }
-
-    this.sistemas.push(novoSistema)
-    this.notify()
-    return novoSistema
   }
 
-  public updateSistema(
+  /**
+   * Operações de escrita: TODAS chamam a Edge Function exclusiva `manage-core-user`
+   */
+  public async createUsuario(data: CreateUserData): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { data: resData, error } = await supabase.functions.invoke('manage-core-user', {
+        body: {
+          action: 'create_user',
+          nome: data.nome,
+          email: data.email,
+          ativo: data.ativo,
+          gestor_id: data.gestor_id,
+          sistemas: data.sistemas,
+          send_invite: data.send_invite ?? true,
+        },
+      })
+
+      if (error) {
+        return { success: false, error: error.message }
+      }
+      if (resData?.error) {
+        return { success: false, error: resData.error }
+      }
+
+      return { success: true }
+    } catch (err: unknown) {
+      const error = err as Error
+      return { success: false, error: error?.message || 'Falha ao cadastrar usuário.' }
+    }
+  }
+
+  public async updateUsuario(
     id: string,
-    data: {
-      nome: string
-      descricao: string
-      ativo: boolean
-    },
-  ): CoreSistema {
-    const index = this.sistemas.findIndex((s) => s.id === id)
-    if (index === -1) throw new Error('Sistema não encontrado')
+    data: UpdateUserData,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { data: resData, error } = await supabase.functions.invoke('manage-core-user', {
+        body: {
+          action: 'update_user',
+          id,
+          nome: data.nome,
+          email: data.email,
+          ativo: data.ativo,
+          gestor_id: data.gestor_id,
+          sistemas: data.sistemas,
+        },
+      })
 
-    const now = new Date().toISOString()
-    this.sistemas[index] = {
-      ...this.sistemas[index],
-      nome: data.nome.trim(),
-      descricao: data.descricao.trim(),
-      ativo: data.ativo,
-      updated_at: now,
-    }
-
-    this.notify()
-    return this.sistemas[index]
-  }
-
-  public toggleSistemaAtivo(id: string): boolean {
-    const index = this.sistemas.findIndex((s) => s.id === id)
-    if (index === -1) return false
-
-    const novoStatus = !this.sistemas[index].ativo
-    this.sistemas[index] = {
-      ...this.sistemas[index],
-      ativo: novoStatus,
-      updated_at: new Date().toISOString(),
-    }
-
-    this.notify()
-    return novoStatus
-  }
-
-  // ===================== PERFIS =====================
-
-  public listPerfis(): PerfilComEstatisticas[] {
-    const sistemasMap = new Map(this.sistemas.map((s) => [s.id, s]))
-
-    return this.perfis.map((perfil) => {
-      const sistema = sistemasMap.get(perfil.sistema_id)
-      // Contagem de usuários ativos atribuídos a este perfil
-      const totalUsuarios = this.usuarioSistemas.filter((us) => {
-        if (us.perfil_id !== perfil.id || !us.ativo) return false
-        const usuario = this.usuarios.find((u) => u.id === us.usuario_id)
-        return usuario && usuario.ativo
-      }).length
-
-      return {
-        ...perfil,
-        sistemaNome: sistema?.nome || 'Sistema Desconhecido',
-        sistemaCodigo: sistema?.codigo || 'N/D',
-        totalUsuarios,
+      if (error) {
+        return { success: false, error: error.message }
       }
-    })
-  }
+      if (resData?.error) {
+        return { success: false, error: resData.error }
+      }
 
-  public listPerfisPorSistema(sistemaId: string): CorePerfil[] {
-    return this.perfis.filter((p) => p.sistema_id === sistemaId && p.ativo)
-  }
-
-  public createPerfil(data: {
-    sistema_id: string
-    codigo: string
-    nome: string
-    descricao: string
-    ativo: boolean
-  }): CorePerfil {
-    const now = new Date().toISOString()
-    const novoPerfil: CorePerfil = {
-      id: `perf-${Date.now()}`,
-      sistema_id: data.sistema_id,
-      codigo: data.codigo.trim().toUpperCase().replace(/\s+/g, '_'),
-      nome: data.nome.trim(),
-      descricao: data.descricao.trim(),
-      ativo: data.ativo,
-      created_at: now,
-      updated_at: now,
+      return { success: true }
+    } catch (err: unknown) {
+      const error = err as Error
+      return { success: false, error: error?.message || 'Falha ao atualizar usuário.' }
     }
-
-    this.perfis.push(novoPerfil)
-    this.notify()
-    return novoPerfil
   }
 
-  public updatePerfil(
+  public async toggleUsuarioAtivo(
     id: string,
-    data: {
-      codigo: string
-      nome: string
-      descricao: string
-      ativo: boolean
-    },
-  ): CorePerfil {
-    const index = this.perfis.findIndex((p) => p.id === id)
-    if (index === -1) throw new Error('Perfil não encontrado')
+  ): Promise<{ success: boolean; error?: string; ativo?: boolean }> {
+    try {
+      const { data: resData, error } = await supabase.functions.invoke('manage-core-user', {
+        body: {
+          action: 'toggle_status',
+          id,
+        },
+      })
 
-    const now = new Date().toISOString()
-    this.perfis[index] = {
-      ...this.perfis[index],
-      codigo: data.codigo.trim().toUpperCase().replace(/\s+/g, '_'),
-      nome: data.nome.trim(),
-      descricao: data.descricao.trim(),
-      ativo: data.ativo,
-      updated_at: now,
-    }
-
-    this.notify()
-    return this.perfis[index]
-  }
-
-  public togglePerfilAtivo(id: string): boolean {
-    const index = this.perfis.findIndex((p) => p.id === id)
-    if (index === -1) return false
-
-    const novoStatus = !this.perfis[index].ativo
-    this.perfis[index] = {
-      ...this.perfis[index],
-      ativo: novoStatus,
-      updated_at: new Date().toISOString(),
-    }
-
-    this.notify()
-    return novoStatus
-  }
-
-  // ===================== ESTATÍSTICAS DASHBOARD =====================
-
-  public getDashboardStats() {
-    const usuariosAtivos = this.usuarios.filter((u) => u.ativo).length
-    const usuariosInativos = this.usuarios.filter((u) => !u.ativo).length
-    const totalSistemas = this.sistemas.length
-    const totalPerfis = this.perfis.length
-
-    // Gráfico de acessos ativos por sistema
-    const acessosPorSistema = this.sistemas.map((sistema) => {
-      const count = this.usuarioSistemas.filter((us) => {
-        if (us.sistema_id !== sistema.id || !us.ativo) return false
-        const usuario = this.usuarios.find((u) => u.id === us.usuario_id)
-        return usuario && usuario.ativo
-      }).length
-
-      return {
-        sistemaId: sistema.id,
-        codigo: sistema.codigo,
-        nome: sistema.nome,
-        ativo: sistema.ativo,
-        usuariosAtivos: count,
+      if (error) {
+        return { success: false, error: error.message }
       }
-    })
+      if (resData?.error) {
+        return { success: false, error: resData.error }
+      }
 
-    const ultimosUsuarios = this.listUsuarios()
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 5)
+      return { success: true, ativo: resData.ativo }
+    } catch (err: unknown) {
+      const error = err as Error
+      return { success: false, error: error?.message || 'Falha ao alternar status do usuário.' }
+    }
+  }
 
-    return {
-      usuariosAtivos,
-      usuariosInativos,
-      totalSistemas,
-      totalPerfis,
-      acessosPorSistema,
-      ultimosUsuarios,
+  public async inviteOuResetSenha(
+    id: string,
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const { data: resData, error } = await supabase.functions.invoke('manage-core-user', {
+        body: {
+          action: 'invite_user',
+          id,
+        },
+      })
+
+      if (error) {
+        return { success: false, error: error.message }
+      }
+      if (resData?.error) {
+        return { success: false, error: resData.error }
+      }
+
+      return { success: true, message: resData.message || 'Operação realizada com sucesso.' }
+    } catch (err: unknown) {
+      const error = err as Error
+      return { success: false, error: error?.message || 'Falha ao disparar convite/recuperação.' }
     }
   }
 }
 
-// Instância singleton da store
-export const accessStore = new AccessStore()
-
-// Funções de serviço públicas para consumo direto pelos componentes da UI
-export const accessService = {
-  // Usuários
-  listUsuarios: () => accessStore.listUsuarios(),
-  getUsuarioById: (id: string) => accessStore.getUsuarioById(id),
-  createUsuario: (data: Parameters<AccessStore['createUsuario']>[0]) =>
-    accessStore.createUsuario(data),
-  updateUsuario: (id: string, data: Parameters<AccessStore['updateUsuario']>[1]) =>
-    accessStore.updateUsuario(id, data),
-  toggleUsuarioAtivo: (id: string) => accessStore.toggleUsuarioAtivo(id),
-
-  // Sistemas
-  listSistemas: () => accessStore.listSistemas(),
-  createSistema: (data: Parameters<AccessStore['createSistema']>[0]) =>
-    accessStore.createSistema(data),
-  updateSistema: (id: string, data: Parameters<AccessStore['updateSistema']>[1]) =>
-    accessStore.updateSistema(id, data),
-  toggleSistemaAtivo: (id: string) => accessStore.toggleSistemaAtivo(id),
-
-  // Perfis
-  listPerfis: () => accessStore.listPerfis(),
-  listPerfisPorSistema: (sistemaId: string) => accessStore.listPerfisPorSistema(sistemaId),
-  createPerfil: (data: Parameters<AccessStore['createPerfil']>[0]) =>
-    accessStore.createPerfil(data),
-  updatePerfil: (id: string, data: Parameters<AccessStore['updatePerfil']>[1]) =>
-    accessStore.updatePerfil(id, data),
-  togglePerfilAtivo: (id: string) => accessStore.togglePerfilAtivo(id),
-
-  // Dashboard
-  getDashboardStats: () => accessStore.getDashboardStats(),
-
-  // Assinatura de mudanças
-  subscribe: (listener: Listener) => accessStore.subscribe(listener),
-}
+export const coreAccessService = new CoreAccessService()

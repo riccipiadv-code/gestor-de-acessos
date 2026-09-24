@@ -169,6 +169,170 @@ export type Database = {
           },
         ]
       }
+      core_perfis: {
+        Row: {
+          ativo: boolean
+          codigo: string
+          created_at: string
+          descricao: string | null
+          id: string
+          nome: string
+          sistema_id: string
+          updated_at: string
+        }
+        Insert: {
+          ativo?: boolean
+          codigo: string
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome: string
+          sistema_id: string
+          updated_at?: string
+        }
+        Update: {
+          ativo?: boolean
+          codigo?: string
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome?: string
+          sistema_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'core_perfis_sistema_id_fkey'
+            columns: ['sistema_id']
+            isOneToOne: false
+            referencedRelation: 'core_sistemas'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      core_sistemas: {
+        Row: {
+          ativo: boolean
+          codigo: string
+          created_at: string
+          descricao: string | null
+          id: string
+          nome: string
+          updated_at: string
+        }
+        Insert: {
+          ativo?: boolean
+          codigo: string
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome: string
+          updated_at?: string
+        }
+        Update: {
+          ativo?: boolean
+          codigo?: string
+          created_at?: string
+          descricao?: string | null
+          id?: string
+          nome?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      core_usuario_sistemas: {
+        Row: {
+          ativo: boolean
+          created_at: string
+          id: string
+          perfil_id: string
+          sistema_id: string
+          updated_at: string
+          usuario_id: string
+        }
+        Insert: {
+          ativo?: boolean
+          created_at?: string
+          id?: string
+          perfil_id: string
+          sistema_id: string
+          updated_at?: string
+          usuario_id: string
+        }
+        Update: {
+          ativo?: boolean
+          created_at?: string
+          id?: string
+          perfil_id?: string
+          sistema_id?: string
+          updated_at?: string
+          usuario_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'core_usuario_sistemas_perfil_sistema_fk'
+            columns: ['perfil_id', 'sistema_id']
+            isOneToOne: false
+            referencedRelation: 'core_perfis'
+            referencedColumns: ['id', 'sistema_id']
+          },
+          {
+            foreignKeyName: 'core_usuario_sistemas_sistema_id_fkey'
+            columns: ['sistema_id']
+            isOneToOne: false
+            referencedRelation: 'core_sistemas'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'core_usuario_sistemas_usuario_id_fkey'
+            columns: ['usuario_id']
+            isOneToOne: false
+            referencedRelation: 'core_usuarios'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      core_usuarios: {
+        Row: {
+          ativo: boolean
+          auth_user_id: string | null
+          created_at: string
+          email: string
+          gestor_id: string | null
+          id: string
+          nome: string
+          updated_at: string
+        }
+        Insert: {
+          ativo?: boolean
+          auth_user_id?: string | null
+          created_at?: string
+          email: string
+          gestor_id?: string | null
+          id?: string
+          nome: string
+          updated_at?: string
+        }
+        Update: {
+          ativo?: boolean
+          auth_user_id?: string | null
+          created_at?: string
+          email?: string
+          gestor_id?: string | null
+          id?: string
+          nome?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'core_usuarios_gestor_id_fkey'
+            columns: ['gestor_id']
+            isOneToOne: false
+            referencedRelation: 'core_usuarios'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       departamentos: {
         Row: {
           id: string
@@ -2407,6 +2571,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      core_is_gestor_acesso_admin: { Args: never; Returns: boolean }
       hard_delete_manychat_contato: {
         Args: { p_contato_id: string }
         Returns: undefined

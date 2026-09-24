@@ -76,7 +76,7 @@ export function ForgotPasswordModal({
             Recuperação de Senha
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-500">
-            Solicite o link corporativo seguro de redefinição de acesso.
+            Solicite o link corporativo seguro de redefinição de acesso via Supabase Auth.
           </DialogDescription>
         </DialogHeader>
 
@@ -91,10 +91,10 @@ export function ForgotPasswordModal({
             </div>
 
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-600 space-y-1">
-              <span className="font-semibold text-slate-800 block">Arquitetura Supabase Auth:</span>
+              <span className="font-semibold text-slate-800 block">Supabase Auth:</span>
               <p>
-                O envio do link seguro é gerido nativamente pelo serviço de autenticação do Supabase
-                (auth.users). Verifique também sua caixa de spam ou quarentena corporativa.
+                O envio do link de recuperação é gerenciado nativamente pelo Supabase Auth.
+                Verifique também sua caixa de spam ou quarentena de e-mails corporativos.
               </p>
             </div>
 

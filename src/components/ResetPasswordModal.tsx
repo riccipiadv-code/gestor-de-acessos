@@ -8,8 +8,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { KeyRound, ShieldAlert, CheckCircle2, Info } from 'lucide-react'
+import { KeyRound, ShieldAlert, CheckCircle2, Info, AlertCircle } from 'lucide-react'
 import type { UsuarioComDetalhes } from '@/lib/data/types'
+import { useAccess } from '@/lib/data/AccessContext'
 
 interface ResetPasswordModalProps {
   open: boolean
@@ -18,30 +19,40 @@ interface ResetPasswordModalProps {
 }
 
 export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswordModalProps) {
+  const { inviteOuResetSenha } = useAccess()
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
+  const [resultMessage, setResultMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   React.useEffect(() => {
     if (open) {
       setSent(false)
       setLoading(false)
+      setResultMessage(null)
+      setError(null)
     }
   }, [open])
 
   if (!usuario) return null
 
-  const handleConfirmReset = () => {
-    // NOTA DE SEGURANÇA E ARQUITETURA:
-    // Redefinição administrativa de senha no Supabase Auth (auth.users)
-    // exige permissão de backend (Admin API / Edge Function protegida com Service Role)
-    // ou envio de email de recuperação padrão (resetPasswordForEmail).
-    // Jamais expor a service_role key no frontend!
-    // Aqui apenas preparamos a ação na interface e confirmamos ao operador.
+  const handleConfirmReset = async () => {
     setLoading(true)
-    setTimeout(() => {
+    setError(null)
+    try {
+      const res = await inviteOuResetSenha(usuario.id)
+      if (res.success) {
+        setResultMessage(res.message || 'Solicitação despachada com sucesso.')
+        setSent(true)
+      } else {
+        setError(res.error || 'Falha ao processar a ação de senha.')
+      }
+    } catch (err: unknown) {
+      const e = err as Error
+      setError(e?.message || 'Erro inesperado.')
+    } finally {
       setLoading(false)
-      setSent(true)
-    }, 400)
+    }
   }
 
   return (
@@ -50,10 +61,10 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
         <DialogHeader className="pb-3 border-b border-slate-100">
           <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
             <KeyRound className="w-5 h-5 text-[#1B4E8C]" />
-            Redefinir Senha do Usuário
+            Ação de Acesso e Senha
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-500">
-            Ação administrativa de segurança corporativa
+            Ação administrativa via Supabase Auth
           </DialogDescription>
         </DialogHeader>
 
@@ -62,22 +73,19 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-start gap-3 text-xs text-emerald-900">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <span className="font-semibold block">Solicitação de redefinição registrada!</span>
-                <p className="leading-relaxed text-emerald-800">
-                  Um link de redefinição segura de senha foi despachado para o e-mail{' '}
-                  <strong className="font-mono">{usuario.email}</strong>.
-                </p>
+                <span className="font-semibold block">Ação executada com sucesso!</span>
+                <p className="leading-relaxed text-emerald-800">{resultMessage}</p>
               </div>
             </div>
 
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-600 space-y-1">
               <span className="font-semibold text-slate-800 flex items-center gap-1.5">
                 <Info className="w-3.5 h-3.5 text-[#1B4E8C]" />
-                Dependência de Integração Supabase Auth:
+                Segurança Supabase Auth:
               </span>
               <p>
-                No ambiente final, o disparo é gerenciado pelo Supabase Auth (auth.users) ou por uma
-                Edge Function corporativa de administração com service_role protegida.
+                As credenciais e links de acesso são despachados diretamente pela Edge Function
+                segura (manage-core-user) e pelo serviço GoTrue do Supabase.
               </p>
             </div>
 
@@ -93,6 +101,13 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
           </div>
         ) : (
           <div className="space-y-4 pt-2">
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2 font-medium">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1 text-xs text-slate-700">
               <div className="flex justify-between">
                 <span className="text-slate-500">Usuário:</span>
@@ -101,6 +116,12 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
               <div className="flex justify-between">
                 <span className="text-slate-500">E-mail:</span>
                 <span className="font-mono font-medium text-slate-800">{usuario.email}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Vínculo Auth:</span>
+                <span className="font-mono text-[11px] text-slate-700">
+                  {usuario.auth_user_id ? 'Vinculado (Auth OK)' : 'Pendente de Convite'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Status:</span>
@@ -117,15 +138,17 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
               <div className="space-y-1 leading-relaxed">
                 <span className="font-semibold block">Regra de Segurança Estrita:</span>
                 <span>
-                  O Gestor de Acesso Ricci nunca armazena senhas nem manipula hashes no frontend. A
-                  redefinição dispara um procedimento seguro diretamente na camada do Supabase Auth.
+                  O Gestor de Acesso nunca armazena senhas no frontend nem em colunas customizadas.
+                  O link de acesso ou redefinição é gerado e despachado nativamente pelo Supabase
+                  Auth.
                 </span>
               </div>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Deseja disparar o fluxo de recuperação de credenciais para este usuário? Um link
-              temporário de acesso com expiração automática será enviado ao endereço cadastrado.
+              {usuario.auth_user_id
+                ? 'Deseja disparar um e-mail de redefinição de senha para este usuário?'
+                : 'Este usuário ainda não possui conta em auth.users. Deseja enviar o convite corporativo de acesso por e-mail?'}
             </p>
 
             <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 sm:justify-end">
@@ -145,7 +168,11 @@ export function ResetPasswordModal({ open, onOpenChange, usuario }: ResetPasswor
                 onClick={handleConfirmReset}
                 className="text-xs bg-[#1B4E8C] hover:bg-[#163F73] text-white"
               >
-                {loading ? 'Disparando...' : 'Confirmar e Enviar Link'}
+                {loading
+                  ? 'Disparando...'
+                  : usuario.auth_user_id
+                    ? 'Confirmar e Enviar Redefinição'
+                    : 'Enviar Convite de Acesso'}
               </Button>
             </DialogFooter>
           </div>

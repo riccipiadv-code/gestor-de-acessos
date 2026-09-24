@@ -1,5 +1,5 @@
 import { Outlet, useNavigate } from 'react-router-dom'
-import { Shield, LogOut, User as UserIcon, ChevronDown } from 'lucide-react'
+import { Shield, LogOut, ChevronDown } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,8 +15,8 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    await logout()
     navigate('/login', { replace: true })
   }
 
@@ -87,7 +87,7 @@ export default function Layout() {
                     {user?.email || 'usuario@riccipi.com.br'}
                   </p>
                   <span className="inline-block mt-1 text-[10px] font-medium text-[#1B4E8C] bg-blue-50 px-1.5 py-0.5 rounded w-max">
-                    {user?.cargo || 'Administrador Gestor'}
+                    Administrador Gestor
                   </span>
                 </div>
               </DropdownMenuLabel>

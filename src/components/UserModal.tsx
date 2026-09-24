@@ -38,9 +38,9 @@ interface UserModalProps {
     email: string
     ativo: boolean
     gestor_id: string | null
-    legaldesk_usuario_id?: string | null
     sistemas: { sistema_id: string; perfil_id: string }[]
-  }) => void
+    send_invite?: boolean
+  }) => Promise<void>
 }
 
 interface SistemaSelection {
@@ -62,11 +62,14 @@ export function UserModal({
   const [email, setEmail] = useState('')
   const [ativo, setAtivo] = useState(true)
   const [gestorId, setGestorId] = useState<string>('none')
-  const [legaldeskId, setLegaldeskId] = useState('')
+  const [sendInvite, setSendInvite] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [serverError, setServerError] = useState<string | null>(null)
   const [sistemasState, setSistemasState] = useState<Record<string, SistemaSelection>>({})
   const [errors, setErrors] = useState<{
     nome?: string
     email?: string
+    gestor?: string
     perfis?: Record<string, string>
   }>({})
 
@@ -74,12 +77,15 @@ export function UserModal({
   useEffect(() => {
     if (!open) return
 
+    setServerError(null)
+    setSaving(false)
+
     if (usuarioParaEditar) {
       setNome(usuarioParaEditar.nome)
       setEmail(usuarioParaEditar.email)
       setAtivo(usuarioParaEditar.ativo)
       setGestorId(usuarioParaEditar.gestor_id || 'none')
-      setLegaldeskId(usuarioParaEditar.legaldesk_usuario_id || '')
+      setSendInvite(false)
 
       const initialSistemas: Record<string, SistemaSelection> = {}
       sistemas.forEach((s) => {
@@ -96,7 +102,7 @@ export function UserModal({
       setEmail('')
       setAtivo(true)
       setGestorId('none')
-      setLegaldeskId('')
+      setSendInvite(true)
 
       const initialSistemas: Record<string, SistemaSelection> = {}
       sistemas.forEach((s) => {
@@ -120,13 +126,11 @@ export function UserModal({
         [sistemaId]: {
           sistema_id: sistemaId,
           selecionado: checked,
-          // Se desmarcou, limpa perfil; se marcou e havia perfil anterior preserva
           perfil_id: checked ? atual?.perfil_id || '' : '',
         },
       }
     })
 
-    // Limpa erro inline do perfil
     if (!checked) {
       setErrors((prev) => {
         const newPerfis = { ...prev.perfis }
@@ -156,6 +160,7 @@ export function UserModal({
     const newErrors: {
       nome?: string
       email?: string
+      gestor?: string
       perfis?: Record<string, string>
     } = { perfis: {} }
 
@@ -172,7 +177,12 @@ export function UserModal({
       }
     }
 
-    // Validação estrita: sistema habilitado = perfil obrigatório; não habilitado = nenhum acesso
+    // Não permitir gestor igual ao próprio usuário
+    if (usuarioParaEditar && gestorId !== 'none' && gestorId === usuarioParaEditar.id) {
+      newErrors.gestor = 'O usuário não pode ser gestor de si mesmo'
+    }
+
+    // Regra estrita: sistema habilitado = perfil daquele sistema obrigatório
     let hasPerfilError = false
     Object.values(sistemasState).forEach((item) => {
       if (item.selecionado && !item.perfil_id) {
@@ -186,14 +196,14 @@ export function UserModal({
     })
 
     setErrors(newErrors)
-    return !newErrors.nome && !newErrors.email && !hasPerfilError
+    return !newErrors.nome && !newErrors.email && !newErrors.gestor && !hasPerfilError
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setServerError(null)
     if (!validate()) return
 
-    // Filtra apenas os sistemas marcados (sistema habilitado com perfil)
     const sistemasSelecionados = Object.values(sistemasState)
       .filter((s) => s.selecionado && Boolean(s.perfil_id))
       .map((s) => ({
@@ -201,20 +211,27 @@ export function UserModal({
         perfil_id: s.perfil_id,
       }))
 
-    onSave({
-      nome,
-      email,
-      ativo,
-      gestor_id: gestorId === 'none' ? null : gestorId,
-      legaldesk_usuario_id: legaldeskId.trim() || null,
-      sistemas: sistemasSelecionados,
-    })
-
-    onOpenChange(false)
+    setSaving(true)
+    try {
+      await onSave({
+        nome: nome.trim(),
+        email: email.trim().toLowerCase(),
+        ativo,
+        gestor_id: gestorId === 'none' ? null : gestorId,
+        sistemas: sistemasSelecionados,
+        send_invite: sendInvite,
+      })
+      onOpenChange(false)
+    } catch (err: unknown) {
+      const e = err as Error
+      setServerError(e?.message || 'Erro ao salvar o usuário.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  // Usuários elegíveis para ser gestor (não pode ser ele mesmo)
-  const possiveisGestores = todosUsuarios.filter((u) => u.id !== usuarioParaEditar?.id)
+  // A lista de gestores deve mostrar apenas usuários corporativos ativos (e não ele próprio)
+  const possiveisGestores = todosUsuarios.filter((u) => u.ativo && u.id !== usuarioParaEditar?.id)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -231,6 +248,13 @@ export function UserModal({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 pt-2">
+          {serverError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{serverError}</span>
+            </div>
+          )}
+
           {/* Seção 1: Dados Principais (Nome, E-mail, Gestor, Ativo) */}
           <div className="space-y-4">
             <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
@@ -264,7 +288,7 @@ export function UserModal({
               <div className="space-y-1.5 sm:col-span-2 sm:grid sm:grid-cols-2 sm:gap-4 sm:space-y-0">
                 <div className="space-y-1.5">
                   <Label htmlFor="email" className="text-xs font-semibold text-slate-700">
-                    E-mail <span className="text-red-500">*</span>
+                    E-mail Corporativo <span className="text-red-500">*</span>
                   </Label>
                   <Input
                     id="email"
@@ -281,10 +305,10 @@ export function UserModal({
                   )}
                 </div>
 
-                {/* Gestor */}
+                {/* Gestor: Apenas usuários corporativos ativos */}
                 <div className="space-y-1.5">
                   <Label htmlFor="gestor" className="text-xs font-semibold text-slate-700">
-                    Gestor
+                    Gestor Responsável
                   </Label>
                   <Select value={gestorId} onValueChange={setGestorId}>
                     <SelectTrigger id="gestor" className="text-xs">
@@ -292,7 +316,7 @@ export function UserModal({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none" className="text-xs">
-                        Nenhum (Diretoria / Autônomo)
+                        Nenhum (Diretoria / Sócio)
                       </SelectItem>
                       {possiveisGestores.map((g) => (
                         <SelectItem key={g.id} value={g.id} className="text-xs">
@@ -301,23 +325,32 @@ export function UserModal({
                       ))}
                     </SelectContent>
                   </Select>
+                  {errors.gestor && (
+                    <p className="text-[11px] text-red-600 flex items-center gap-1 font-medium">
+                      <AlertCircle className="w-3 h-3" /> {errors.gestor}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Identificador LegalDesk opcional */}
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="legaldesk" className="text-xs font-semibold text-slate-700">
-                  Identificador LegalDesk{' '}
-                  <span className="text-slate-400 font-normal">(opcional)</span>
-                </Label>
-                <Input
-                  id="legaldesk"
-                  value={legaldeskId}
-                  onChange={(e) => setLegaldeskId(e.target.value)}
-                  placeholder="Ex.: LD-042"
-                  className="font-mono text-xs"
-                />
-              </div>
+              {/* Convite por e-mail para novo usuário */}
+              {!usuarioParaEditar && (
+                <div className="space-y-1 sm:col-span-2 p-3 bg-blue-50/50 border border-blue-200/70 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <Label
+                      htmlFor="send-invite"
+                      className="text-xs font-bold text-slate-800 cursor-pointer"
+                    >
+                      Enviar Convite por E-mail (Supabase Auth)
+                    </Label>
+                    <Switch id="send-invite" checked={sendInvite} onCheckedChange={setSendInvite} />
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Dispara automaticamente o link de primeiro acesso para criação de senha via
+                    GoTrue.
+                  </p>
+                </div>
+              )}
 
               {/* Switch Ativo / Inativo com aviso de bloqueio universal */}
               <div className="space-y-1.5 sm:col-span-2 p-3 bg-slate-50 border border-slate-200 rounded-lg">
@@ -346,7 +379,7 @@ export function UserModal({
                     <ShieldAlert className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
                     <span>
                       <strong>Atenção:</strong> Usuário inativo tem todos os acessos bloqueados
-                      imediatamente, independente das permissões abaixo.
+                      imediatamente, independente das permissões configuradas abaixo.
                     </span>
                   </div>
                 )}
@@ -376,7 +409,7 @@ export function UserModal({
                   perfil_id: '',
                 }
 
-                // Perfis disponíveis para este sistema
+                // Perfis disponíveis pertencentes a este sistema
                 const perfisDoSistema = perfis.filter((p) => p.sistema_id === sistema.id && p.ativo)
                 const hasError = Boolean(errors.perfis?.[sistema.id])
 
@@ -414,7 +447,9 @@ export function UserModal({
                               </span>
                             )}
                           </Label>
-                          <p className="text-[11px] text-slate-500 mt-0.5">{sistema.descricao}</p>
+                          {sistema.descricao && (
+                            <p className="text-[11px] text-slate-500 mt-0.5">{sistema.descricao}</p>
+                          )}
                         </div>
                       </div>
 
@@ -457,7 +492,11 @@ export function UserModal({
                               <SelectItem key={p.id} value={p.id} className="text-xs">
                                 <div className="flex flex-col text-left">
                                   <span className="font-medium text-slate-900">{p.nome}</span>
-                                  <span className="text-[10px] text-slate-500">{p.descricao}</span>
+                                  {p.descricao && (
+                                    <span className="text-[10px] text-slate-500">
+                                      {p.descricao}
+                                    </span>
+                                  )}
                                 </div>
                               </SelectItem>
                             ))}
@@ -482,14 +521,23 @@ export function UserModal({
             <Button
               type="button"
               variant="outline"
+              disabled={saving}
               onClick={() => onOpenChange(false)}
               className="text-xs"
             >
               Cancelar
             </Button>
-            <Button type="submit" className="text-xs bg-[#1B4E8C] hover:bg-[#163F73] text-white">
+            <Button
+              type="submit"
+              disabled={saving}
+              className="text-xs bg-[#1B4E8C] hover:bg-[#163F73] text-white"
+            >
               <Check className="w-3.5 h-3.5 mr-1.5" />
-              {usuarioParaEditar ? 'Salvar Alterações' : 'Cadastrar Usuário'}
+              {saving
+                ? 'Salvando...'
+                : usuarioParaEditar
+                  ? 'Salvar Alterações'
+                  : 'Cadastrar Usuário'}
             </Button>
           </DialogFooter>
         </form>
