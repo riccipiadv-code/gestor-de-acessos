@@ -83,20 +83,51 @@ export const passwordRecoveryStorage = {
       const hash = window.location.hash || ''
       const search = window.location.search || ''
 
-      // Supabase Auth pode enviar:
+      // Supabase Auth pode enviar no hash ou search:
       // Hash: #access_token=...&type=recovery... ou #type=recovery
       // Search: ?type=recovery ou ?token_hash=...&type=recovery
       if (hash.includes('type=recovery') || search.includes('type=recovery')) {
         return true
       }
 
-      // Detecção de access_token com type=recovery no hash
       if (hash.includes('access_token=') && hash.includes('recovery')) {
+        return true
+      }
+
+      // Supabase PKCE code exchange or token_hash with recovery
+      const searchParams = new URLSearchParams(search)
+      if (searchParams.get('type') === 'recovery') {
         return true
       }
     } catch {
       return false
     }
     return false
+  },
+
+  // Retorna se a URL atual contém erros explícitos de auth na query ou hash
+  // (ex: #error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired)
+  getRecoveryErrorFromUrl(): string | null {
+    if (typeof window === 'undefined') return null
+    try {
+      const hash = window.location.hash || ''
+      const search = window.location.search || ''
+
+      const parseError = (queryString: string) => {
+        const clean = queryString.replace(/^[#?]/, '')
+        if (!clean) return null
+        const params = new URLSearchParams(clean)
+        const errDesc = params.get('error_description')
+        const errCode = params.get('error_code')
+        const err = params.get('error')
+        if (errDesc) return decodeURIComponent(errDesc.replace(/\+/g, ' '))
+        if (errCode || err) return errCode || err
+        return null
+      }
+
+      return parseError(hash) || parseError(search)
+    } catch {
+      return null
+    }
   },
 }

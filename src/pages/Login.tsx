@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/lib/data/AuthContext'
+import { passwordRecoveryStorage } from '@/lib/data/passwordRecoveryStorage'
 import { ForgotPasswordModal } from '@/components/ForgotPasswordModal'
 
 export default function LoginPage() {
@@ -26,7 +27,11 @@ export default function LoginPage() {
 
   // Se estiver em fluxo de recuperação, direciona para /redefinir-senha
   React.useEffect(() => {
-    if (isPasswordRecovery) {
+    if (
+      isPasswordRecovery ||
+      passwordRecoveryStorage.isPending() ||
+      passwordRecoveryStorage.hasRecoveryUrlParams()
+    ) {
       navigate('/redefinir-senha', { replace: true })
       return
     }
@@ -37,7 +42,11 @@ export default function LoginPage() {
     }
   }, [isAuthenticated, isPasswordRecovery, navigate])
 
-  if (isPasswordRecovery) {
+  if (
+    isPasswordRecovery ||
+    passwordRecoveryStorage.isPending() ||
+    passwordRecoveryStorage.hasRecoveryUrlParams()
+  ) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
         <div className="text-xs text-slate-500 font-medium">

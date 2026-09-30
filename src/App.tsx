@@ -10,6 +10,7 @@ import NotFound from './pages/NotFound'
 import Layout from './components/Layout'
 import { AccessProvider } from './lib/data/AccessContext'
 import { AuthProvider, useAuth } from './lib/data/AuthContext'
+import { passwordRecoveryStorage } from './lib/data/passwordRecoveryStorage'
 
 // Componente de proteção de rota administrativa
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -40,16 +41,21 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function LoginRouteGuard() {
   const { isPasswordRecovery, isAuthenticated, isLoading } = useAuth()
 
+  // Se houver sinal imediato na URL (hash/search) ou storage de recovery, não esperar: vai direto para /redefinir-senha
+  if (
+    isPasswordRecovery ||
+    passwordRecoveryStorage.isPending() ||
+    passwordRecoveryStorage.hasRecoveryUrlParams()
+  ) {
+    return <Navigate to="/redefinir-senha" replace />
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
         <div className="text-xs text-slate-500 font-medium">Carregando ambiente seguro...</div>
       </div>
     )
-  }
-
-  if (isPasswordRecovery) {
-    return <Navigate to="/redefinir-senha" replace />
   }
 
   if (isAuthenticated) {
@@ -63,16 +69,20 @@ function LoginRouteGuard() {
 function RootRedirect() {
   const { isAuthenticated, isPasswordRecovery, isLoading } = useAuth()
 
+  if (
+    isPasswordRecovery ||
+    passwordRecoveryStorage.isPending() ||
+    passwordRecoveryStorage.hasRecoveryUrlParams()
+  ) {
+    return <Navigate to="/redefinir-senha" replace />
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
         <div className="text-xs text-slate-500 font-medium">Carregando ambiente seguro...</div>
       </div>
     )
-  }
-
-  if (isPasswordRecovery) {
-    return <Navigate to="/redefinir-senha" replace />
   }
 
   return <Navigate to={isAuthenticated ? '/usuarios' : '/login'} replace />

@@ -271,7 +271,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setAuthError(null)
         } else {
           // Cadeia falhou para login normal: encerra a sessão imediatamente
-          await supabase.auth.signOut()
+          await supabase.auth.signOut({ scope: 'local' })
           setSession(null)
           setAuthUser(null)
           setUser(null)
@@ -289,7 +289,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
     }
-
     initializeAuth()
 
     return () => {
@@ -369,6 +368,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     novaSenha: string,
   ): Promise<{ success: boolean; error?: string }> => {
     try {
+      // 1. Só permitir se houver sessão ativa explicitamente originada de recovery
+      if (!isPasswordRecoveryRef.current && !passwordRecoveryStorage.isPending()) {
+        await supabase.auth.signOut({ scope: 'local' })
+        passwordRecoveryStorage.clear()
+        isPasswordRecoveryRef.current = false
+        setIsPasswordRecovery(false)
+        setUser(null)
+        setSession(null)
+        setAuthUser(null)
+        return {
+          success: false,
+          error:
+            'Acesso não autorizado: a redefinição de senha requer um link de recuperação válido.',
+        }
+      }
+
+      // Validação da sessão ativa do Supabase
+      const {
+        data: { session: currentSession },
+      } = await supabase.auth.getSession()
+
+      if (!currentSession?.user) {
+        await supabase.auth.signOut({ scope: 'local' })
+        passwordRecoveryStorage.clear()
+        isPasswordRecoveryRef.current = false
+        setIsPasswordRecovery(false)
+        setUser(null)
+        setSession(null)
+        setAuthUser(null)
+        return {
+          success: false,
+          error: 'Sessão de recuperação expirada ou inválida. Solicite um novo link.',
+        }
+      }
+
+      // 2. Chamar updateUser({ password })
       const { data, error } = await supabase.auth.updateUser({
         password: novaSenha,
       })
@@ -381,18 +416,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: 'Falha ao redefinir senha no Supabase Auth.' }
       }
 
-      // Encerra a sessão temporária de recuperação por segurança e limpa o estado
+      // 3. Encerrar a sessão de recovery local com signOut({ scope: 'local' })
       try {
-        await supabase.auth.signOut()
-      } catch {
-        // Ignora eventual falha de rede no signOut
+        await supabase.auth.signOut({ scope: 'local' })
+      } catch (signOutErr) {
+        console.warn('Aviso no signOut local após redefinição:', signOutErr)
       }
+
+      // 4. Limpar o estado persistido de recovery
       passwordRecoveryStorage.clear()
       isPasswordRecoveryRef.current = false
       setIsPasswordRecovery(false)
       setUser(null)
       setSession(null)
       setAuthUser(null)
+
+      // 5. Confirmar que não resta sessão local antes de confirmar sucesso
+      const {
+        data: { session: postSignOutSession },
+      } = await supabase.auth.getSession()
+
+      if (postSignOutSession) {
+        // Tenta mais um signOut forçado
+        try {
+          await supabase.auth.signOut({ scope: 'local' })
+        } catch {
+          // ignore
+        }
+        // Se ainda restar sessão, não tratar como login
+        return {
+          success: false,
+          error:
+            'Não foi possível encerrar a sessão de recuperação local com segurança. Por favor, feche o navegador.',
+        }
+      }
 
       return { success: true }
     } catch (err: unknown) {
@@ -403,7 +460,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const cancelarRecuperacaoSenha = async () => {
     try {
-      await supabase.auth.signOut()
+      await supabase.auth.signOut({ scope: 'local' })
     } finally {
       passwordRecoveryStorage.clear()
       isPasswordRecoveryRef.current = false
@@ -421,7 +478,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const redirectUrl = `${window.location.origin}/`
+      // Regra obrigatória: usar explicitamente a URL única de recuperação dos Sistemas Ricci
+      const redirectUrl = 'https://acessos-ricci.goskip.app/redefinir-senha'
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
         redirectTo: redirectUrl,
       })

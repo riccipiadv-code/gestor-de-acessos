@@ -38,9 +38,22 @@ export default function RedefinirSenhaPage() {
   const temNumero = /[0-9]/.test(novaSenha)
   const senhasConferem = novaSenha.length > 0 && novaSenha === confirmacaoSenha
 
+  // Se não estiver em recovery e não estiver carregando, encerra qualquer sessão local existente
+  React.useEffect(() => {
+    if (!isLoading && !isPasswordRecovery) {
+      cancelarRecuperacaoSenha()
+    }
+  }, [isLoading, isPasswordRecovery, cancelarRecuperacaoSenha])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setErro(null)
+
+    // Bloqueio rigoroso: não permitir submissão sem sessão de recovery válida
+    if (!isPasswordRecovery) {
+      setErro('O link de recuperação é inválido ou já expirou. Solicite um novo link.')
+      return
+    }
 
     if (!novaSenha) {
       setErro('Por favor, informe a nova senha.')
@@ -83,10 +96,13 @@ export default function RedefinirSenhaPage() {
     navigate('/login', {
       replace: true,
       state: eraSucesso
-        ? { mensagemSucesso: 'Senha atualizada com sucesso! Faça login com a sua nova senha.' }
+        ? { mensagemSucesso: 'Senha redefinida com sucesso. Faça login com a sua nova senha.' }
         : undefined,
     })
   }
+
+  // Estado inválido / expirado / ausente
+  const linkInvalido = !isLoading && !isPasswordRecovery && !sucesso
 
   return (
     <div className="min-h-screen bg-[#F5F7FA] text-[#1F2937] flex flex-col justify-between antialiased">
@@ -106,7 +122,7 @@ export default function RedefinirSenhaPage() {
           </div>
         </div>
         <div className="text-xs text-slate-500 font-medium hidden sm:block">
-          Redefinição Segura de Credencial Corporativa
+          Redefinição Segura de Senha Corporativa
         </div>
       </header>
 
@@ -118,21 +134,46 @@ export default function RedefinirSenhaPage() {
               <div className="inline-flex w-14 h-14 rounded-full bg-emerald-50 text-emerald-600 items-center justify-center">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-                  Senha Alterada com Sucesso!
+                  Senha Redefinida com Sucesso
+                </h1>
+                <p className="text-xs text-slate-600 leading-relaxed font-normal">
+                  Senha redefinida com sucesso. Você já pode utilizar sua nova senha para acessar os
+                  sistemas Ricci aos quais possui permissão.
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <Button
+                  type="button"
+                  onClick={handleVoltarLogin}
+                  className="w-full text-xs font-semibold bg-[#1B4E8C] hover:bg-[#163F73] text-white h-10 shadow-xs"
+                >
+                  Ir para a Tela de Login
+                </Button>
+              </div>
+            </div>
+          ) : linkInvalido ? (
+            <div className="space-y-5 text-center">
+              <div className="inline-flex w-14 h-14 rounded-full bg-amber-50 text-amber-600 items-center justify-center">
+                <AlertCircle className="w-8 h-8" />
+              </div>
+              <div className="space-y-2">
+                <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+                  Link Inválido ou Expirado
                 </h1>
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Sua nova senha corporativa foi cadastrada no Supabase Auth. A sessão temporária de
-                  recuperação foi encerrada por segurança.
+                  O link de recuperação de senha utilizado é inválido, expirou ou já foi utilizado
+                  anteriormente. Por segurança, nenhuma alteração de credencial pode ser realizada.
                 </p>
               </div>
 
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 text-left space-y-1">
-                <span className="font-semibold text-slate-800">Próximo passo:</span>
+                <span className="font-semibold text-slate-800">O que fazer:</span>
                 <p>
-                  Acesse o Gestor de Acesso com seu e-mail corporativo e a nova senha
-                  recém-definida.
+                  Retorne à tela inicial e solicite um novo link de redefinição de senha para o seu
+                  e-mail corporativo.
                 </p>
               </div>
 
@@ -141,7 +182,7 @@ export default function RedefinirSenhaPage() {
                 onClick={handleVoltarLogin}
                 className="w-full text-xs font-semibold bg-[#1B4E8C] hover:bg-[#163F73] text-white h-10 shadow-xs"
               >
-                Ir para a Tela de Login
+                Solicitar Novo Link no Login
               </Button>
             </div>
           ) : (
@@ -166,17 +207,7 @@ export default function RedefinirSenhaPage() {
                 </p>
               </div>
 
-              {!isLoading && !isPasswordRecovery && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
-                  <span>
-                    Aviso: Nenhuma sessão ativa de recuperação foi identificada. Se encontrar
-                    problemas ao salvar a nova senha, solicite um novo link na tela de login.
-                  </span>
-                </div>
-              )}
-
-              {/* Formulário */}
+              {/* Formulário funcional — só acessível se isPasswordRecovery === true */}
               <form onSubmit={handleSubmit} className="space-y-4">
                 {erro && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2 font-medium">
@@ -330,7 +361,7 @@ export default function RedefinirSenhaPage() {
           © {new Date().getFullYear()} <span className="font-semibold text-slate-700">Ricci</span> —
           Gestor de Acesso
         </div>
-        <div className="text-[11px] text-slate-400 font-mono">Supabase Auth Security</div>
+        <div className="text-[11px] text-slate-400 font-mono">Autenticação Corporativa Segura</div>
       </footer>
     </div>
   )
