@@ -144,13 +144,29 @@ export default function RedefinirSenhaPage() {
                 </p>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-2 space-y-2">
                 <Button
                   type="button"
                   onClick={handleVoltarLogin}
                   className="w-full text-xs font-semibold bg-[#1B4E8C] hover:bg-[#163F73] text-white h-10 shadow-xs"
                 >
-                  Ir para a Tela de Login
+                  Ir a Gestor de Acesso
+                </Button>
+                <Button
+                  type="button"
+                  asChild
+                  variant="outline"
+                  className="w-full text-xs font-semibold border-slate-300 hover:bg-slate-50 text-slate-700 h-10 shadow-xs"
+                >
+                  <a href="https://conectai.goskip.app/login">Ir para o Conectaí</a>
+                </Button>
+                <Button
+                  type="button"
+                  asChild
+                  variant="outline"
+                  className="w-full text-xs font-semibold border-slate-300 hover:bg-slate-50 text-slate-700 h-10 shadow-xs"
+                >
+                  <a href="https://ricci-task.goskip.app/login">Ir para o Ricci Task</a>
                 </Button>
               </div>
             </div>
