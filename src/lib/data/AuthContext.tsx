@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase/client'
 import { passwordRecoveryStorage } from './passwordRecoveryStorage'
+import { inviteSessionStorage } from './inviteSessionStorage'
 
 export interface AuthContextUser {
   id: string
@@ -20,11 +21,15 @@ interface AuthContextValue {
   isLoading: boolean
   authError: string | null
   isPasswordRecovery: boolean
+  isFirstAccess: boolean
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
   logout: () => Promise<void>
   solicitarRecuperacaoSenha: (email: string) => Promise<{ success: boolean; message: string }>
   atualizarSenhaRecuperacao: (novaSenha: string) => Promise<{ success: boolean; error?: string }>
   cancelarRecuperacaoSenha: () => Promise<void>
+  concluirPrimeiroAcesso: (novaSenha: string) => Promise<{ success: boolean; error?: string }>
+  cancelarPrimeiroAcesso: () => Promise<void>
+  marcarPrimeiroAcessoAtivo: (userId?: string, email?: string) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -44,11 +49,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return pendingInStorage || hasUrlParams
   })
 
+  const [isFirstAccess, setIsFirstAccess] = useState<boolean>(() => {
+    // Inicializa a partir de:
+    // 1. Estado persistido em storage (sobrevive a reload, nova aba, reabertura do link)
+    // 2. Fragmentos/parâmetros de invite na URL
+    // 3. Caminho atual ser /primeiro-acesso
+    const pendingInStorage = inviteSessionStorage.isPending()
+    const hasUrlParams = inviteSessionStorage.hasInviteUrlParams()
+    const isAtPrimeiroAcessoPath =
+      typeof window !== 'undefined' && window.location.pathname.startsWith('/primeiro-acesso')
+    return pendingInStorage || hasUrlParams || isAtPrimeiroAcessoPath
+  })
+
   // Ref para sincronizar o estado síncrono nos callbacks sem depender de closures antigas
   const isPasswordRecoveryRef = useRef<boolean>(isPasswordRecovery)
   useEffect(() => {
     isPasswordRecoveryRef.current = isPasswordRecovery
   }, [isPasswordRecovery])
+
+  const isFirstAccessRef = useRef<boolean>(isFirstAccess)
+  useEffect(() => {
+    isFirstAccessRef.current = isFirstAccess
+  }, [isFirstAccess])
 
   // Validação OBRIGATÓRIA da cadeia de autorização:
   // auth.users → core_usuarios pelo auth_user_id → usuário ativo → RPC core_is_gestor_acesso_admin() = true
@@ -156,17 +178,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return
       }
 
-      // Se for SIGNED_OUT, limpa tudo e desliga recovery
+      // Se for SIGNED_OUT, limpa tudo e desliga recovery / invite
       if (event === 'SIGNED_OUT' || !newSession?.user) {
         passwordRecoveryStorage.clear()
+        inviteSessionStorage.clear()
         isPasswordRecoveryRef.current = false
+        isFirstAccessRef.current = false
         setUser(null)
         setIsPasswordRecovery(false)
+        setIsFirstAccess(false)
         setIsLoading(false)
         return
       }
 
-      // Detecção de recuperação ativa por storage persistido, URL ou flag em memória
+      // 1. Detecção de PRIMEIRO ACESSO (CONVITE) ativo por storage, URL ou flag em memória
+      const isAtPrimeiroAcessoPath =
+        typeof window !== 'undefined' && window.location.pathname.startsWith('/primeiro-acesso')
+      const pendingInviteInStorage = inviteSessionStorage.isPending()
+      const hasInviteUrlParams = inviteSessionStorage.hasInviteUrlParams()
+      const isInviteActive =
+        isFirstAccessRef.current ||
+        pendingInviteInStorage ||
+        hasInviteUrlParams ||
+        isAtPrimeiroAcessoPath
+
+      if (isInviteActive) {
+        // Persistir estado de primeiro acesso isolado
+        inviteSessionStorage.setPending({
+          userId: newSession.user.id,
+          email: newSession.user.email,
+          verified: inviteSessionStorage.isVerified(),
+        })
+        isFirstAccessRef.current = true
+        setIsFirstAccess(true)
+        setUser(null) // NUNCA autoriza acesso administrativo corporativo
+        setAuthError(null)
+        setIsLoading(false)
+        return
+      }
+      // 2. Detecção de recuperação ativa por storage persistido, URL ou flag em memória
       const pendingInStorage = passwordRecoveryStorage.isPending()
       const hasUrlParams = passwordRecoveryStorage.hasRecoveryUrlParams()
       const isRecoveryActive = isPasswordRecoveryRef.current || pendingInStorage || hasUrlParams
@@ -185,8 +235,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Sessão normal: validar cadeia de autorização corporativa
+      // Guarda estrita: se for ou se tornar primeiro acesso / recovery durante a chamada, bloqueia
       validateAccessChain(newSession.user).then((check) => {
         if (!isMounted) return
+        if (
+          isFirstAccessRef.current ||
+          inviteSessionStorage.isPending() ||
+          inviteSessionStorage.hasInviteUrlParams() ||
+          (typeof window !== 'undefined' && window.location.pathname.startsWith('/primeiro-acesso'))
+        ) {
+          setUser(null)
+          setIsLoading(false)
+          return
+        }
         // Dupla checagem: se virou recovery durante a validação assíncrona, ignora login
         if (isPasswordRecoveryRef.current || passwordRecoveryStorage.isPending()) {
           setUser(null)
@@ -212,6 +273,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Sincronização inicial da sessão (ex: reload da página ou abertura do link)
     const initializeAuth = async () => {
       try {
+        const isAtPrimeiroAcessoPath =
+          typeof window !== 'undefined' && window.location.pathname.startsWith('/primeiro-acesso')
+        const hasInviteUrlParams = inviteSessionStorage.hasInviteUrlParams()
+        const pendingInviteInStorage = inviteSessionStorage.isPending()
+        const isInviteExpected =
+          hasInviteUrlParams || pendingInviteInStorage || isAtPrimeiroAcessoPath
+
+        if (isInviteExpected) {
+          isFirstAccessRef.current = true
+          setIsFirstAccess(true)
+        }
+
         const hasUrlParams = passwordRecoveryStorage.hasRecoveryUrlParams()
         const pendingInStorage = passwordRecoveryStorage.isPending()
         const isRecoveryExpected = hasUrlParams || pendingInStorage
@@ -228,7 +301,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!isMounted) return
 
         if (!initialSession?.user) {
-          // Se não há sessão, mas havia flag no storage, remove flag pois a sessão já expirou
+          // Se não há sessão, mas havia flag no storage, remove flag se a URL não trouxer tokens novos
+          if (!hasInviteUrlParams && !isAtPrimeiroAcessoPath) {
+            inviteSessionStorage.clear()
+            isFirstAccessRef.current = false
+            setIsFirstAccess(false)
+          }
           if (!hasUrlParams) {
             passwordRecoveryStorage.clear()
             isPasswordRecoveryRef.current = false
@@ -244,6 +322,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSession(initialSession)
         setAuthUser(initialSession.user)
 
+        // Se for PRIMEIRO ACESSO (por storage, URL ou rota), persiste e NUNCA valida cadeia corporativa
+        if (isInviteExpected || isFirstAccessRef.current) {
+          inviteSessionStorage.setPending({
+            userId: initialSession.user.id,
+            email: initialSession.user.email,
+            verified: inviteSessionStorage.isVerified(),
+          })
+          isFirstAccessRef.current = true
+          setIsFirstAccess(true)
+          setUser(null)
+          setIsLoading(false)
+          return
+        }
         // Se for recuperação (por storage, URL ou ref), persiste e NUNCA valida cadeia corporativa
         if (isRecoveryExpected || isPasswordRecoveryRef.current) {
           passwordRecoveryStorage.setPending({
@@ -259,6 +350,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const check = await validateAccessChain(initialSession.user)
         if (!isMounted) return
+
+        if (
+          isFirstAccessRef.current ||
+          inviteSessionStorage.isPending() ||
+          inviteSessionStorage.hasInviteUrlParams() ||
+          (typeof window !== 'undefined' && window.location.pathname.startsWith('/primeiro-acesso'))
+        ) {
+          setUser(null)
+          setIsLoading(false)
+          return
+        }
 
         if (isPasswordRecoveryRef.current || passwordRecoveryStorage.isPending()) {
           setUser(null)
@@ -354,13 +456,133 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await supabase.auth.signOut()
     } finally {
       passwordRecoveryStorage.clear()
+      inviteSessionStorage.clear()
       isPasswordRecoveryRef.current = false
+      isFirstAccessRef.current = false
       setUser(null)
       setSession(null)
       setAuthUser(null)
       setAuthError(null)
       setIsPasswordRecovery(false)
+      setIsFirstAccess(false)
     }
+  }
+
+  // Conclui o primeiro acesso: cadastra a senha na sessão temporária, faz signOut local rigoroso
+  const concluirPrimeiroAcesso = async (
+    novaSenha: string,
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      // 1. Só permitir se houver primeiro acesso comprovadamente ativo
+      if (!isFirstAccessRef.current && !inviteSessionStorage.isPending()) {
+        await supabase.auth.signOut({ scope: 'local' })
+        inviteSessionStorage.clear()
+        isFirstAccessRef.current = false
+        setIsFirstAccess(false)
+        setUser(null)
+        setSession(null)
+        setAuthUser(null)
+        return {
+          success: false,
+          error: 'Acesso não autorizado: a definição da primeira senha requer um convite válido.',
+        }
+      }
+
+      // Validação da sessão ativa do Supabase
+      const {
+        data: { session: currentSession },
+      } = await supabase.auth.getSession()
+
+      if (!currentSession?.user) {
+        await supabase.auth.signOut({ scope: 'local' })
+        inviteSessionStorage.clear()
+        isFirstAccessRef.current = false
+        setIsFirstAccess(false)
+        setUser(null)
+        setSession(null)
+        setAuthUser(null)
+        return {
+          success: false,
+          error:
+            'Sessão de convite expirada ou inválida. Solicite um novo convite ao administrador.',
+        }
+      }
+
+      // 2. Chamar supabase.auth.updateUser({ password }) na sessão temporária do convidado
+      const { data, error } = await supabase.auth.updateUser({
+        password: novaSenha,
+      })
+
+      if (error) {
+        return { success: false, error: error.message }
+      }
+
+      if (!data.user) {
+        return { success: false, error: 'Falha ao cadastrar senha no Supabase Auth.' }
+      }
+
+      // 3. Encerrar a sessão temporária com signOut({ scope: 'local' }) e VERIFICAR o resultado
+      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' })
+      if (signOutError) {
+        console.error('Erro ao encerrar sessão temporária:', signOutError)
+        return {
+          success: false,
+          error:
+            'A senha foi atualizada, mas não foi possível encerrar a sessão temporária com segurança. Não navegue na área interna e tente recarregar a página.',
+        }
+      }
+
+      // 4. Limpar o estado específico do primeiro acesso
+      inviteSessionStorage.clear()
+      isFirstAccessRef.current = false
+      setIsFirstAccess(false)
+      setUser(null)
+      setSession(null)
+      setAuthUser(null)
+
+      // 5. Confirmar que não resta sessão local antes de informar sucesso
+      const {
+        data: { session: postSignOutSession },
+      } = await supabase.auth.getSession()
+
+      if (postSignOutSession) {
+        try {
+          await supabase.auth.signOut({ scope: 'local' })
+        } catch {
+          // ignore
+        }
+        return {
+          success: false,
+          error:
+            'A sessão temporária ainda permanece ativa no navegador. Por segurança, feche esta aba antes de acessar os sistemas Ricci.',
+        }
+      }
+
+      return { success: true }
+    } catch (err: unknown) {
+      const e = err as Error
+      return { success: false, error: e?.message || 'Erro inesperado ao definir senha.' }
+    }
+  }
+
+  const cancelarPrimeiroAcesso = async () => {
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } finally {
+      inviteSessionStorage.clear()
+      isFirstAccessRef.current = false
+      setIsFirstAccess(false)
+      setUser(null)
+      setSession(null)
+      setAuthUser(null)
+    }
+  }
+
+  const marcarPrimeiroAcessoAtivo = (userId?: string, email?: string) => {
+    inviteSessionStorage.setVerified(userId, email)
+    isFirstAccessRef.current = true
+    setIsFirstAccess(true)
+    setUser(null)
   }
 
   // Atualiza a senha do usuário com a sessão atual de recovery
@@ -507,15 +729,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         session,
         authUser,
-        isAuthenticated: Boolean(!isPasswordRecovery && user && user.is_admin),
+        isAuthenticated: Boolean(!isPasswordRecovery && !isFirstAccess && user && user.is_admin),
         isLoading,
         authError,
         isPasswordRecovery,
+        isFirstAccess,
         login,
         logout,
         solicitarRecuperacaoSenha,
         atualizarSenhaRecuperacao,
         cancelarRecuperacaoSenha,
+        concluirPrimeiroAcesso,
+        cancelarPrimeiroAcesso,
+        marcarPrimeiroAcessoAtivo,
       }}
     >
       {children}

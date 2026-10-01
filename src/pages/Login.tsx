@@ -6,12 +6,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/lib/data/AuthContext'
 import { passwordRecoveryStorage } from '@/lib/data/passwordRecoveryStorage'
+import { inviteSessionStorage } from '@/lib/data/inviteSessionStorage'
 import { ForgotPasswordModal } from '@/components/ForgotPasswordModal'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { login, isAuthenticated, isPasswordRecovery, authError } = useAuth()
+  const { login, isAuthenticated, isPasswordRecovery, isFirstAccess, authError } = useAuth()
 
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
@@ -25,8 +26,17 @@ export default function LoginPage() {
     return state?.mensagemSucesso || null
   })
 
-  // Se estiver em fluxo de recuperação, direciona para /redefinir-senha
+  // Se estiver em fluxo de convite ou de recuperação, redireciona para a rota apropriada
   React.useEffect(() => {
+    if (
+      isFirstAccess ||
+      inviteSessionStorage.isPending() ||
+      inviteSessionStorage.hasInviteUrlParams()
+    ) {
+      navigate('/primeiro-acesso', { replace: true })
+      return
+    }
+
     if (
       isPasswordRecovery ||
       passwordRecoveryStorage.isPending() ||
@@ -40,7 +50,21 @@ export default function LoginPage() {
     if (isAuthenticated) {
       navigate('/usuarios', { replace: true })
     }
-  }, [isAuthenticated, isPasswordRecovery, navigate])
+  }, [isAuthenticated, isPasswordRecovery, isFirstAccess, navigate])
+
+  if (
+    isFirstAccess ||
+    inviteSessionStorage.isPending() ||
+    inviteSessionStorage.hasInviteUrlParams()
+  ) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F5F7FA]">
+        <div className="text-xs text-slate-500 font-medium">
+          Redirecionando para primeiro acesso...
+        </div>
+      </div>
+    )
+  }
 
   if (
     isPasswordRecovery ||

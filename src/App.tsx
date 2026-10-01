@@ -6,15 +6,17 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import UsuariosPage from './pages/Usuarios'
 import LoginPage from './pages/Login'
 import RedefinirSenhaPage from './pages/RedefinirSenha'
+import PrimeiroAcessoPage from './pages/PrimeiroAcesso'
 import NotFound from './pages/NotFound'
 import Layout from './components/Layout'
 import { AccessProvider } from './lib/data/AccessContext'
 import { AuthProvider, useAuth } from './lib/data/AuthContext'
 import { passwordRecoveryStorage } from './lib/data/passwordRecoveryStorage'
+import { inviteSessionStorage } from './lib/data/inviteSessionStorage'
 
 // Componente de proteção de rota administrativa
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isPasswordRecovery, isLoading } = useAuth()
+  const { isAuthenticated, isPasswordRecovery, isFirstAccess, isLoading } = useAuth()
 
   if (isLoading) {
     return (
@@ -24,9 +26,22 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     )
   }
 
+  // Sessão de primeiro acesso (convite) NUNCA tem acesso às rotas administrativas
+  if (
+    isFirstAccess ||
+    inviteSessionStorage.isPending() ||
+    inviteSessionStorage.hasInviteUrlParams()
+  ) {
+    return <Navigate to="/primeiro-acesso" replace />
+  }
+
   // Sessão de recuperação de senha NUNCA tem acesso às rotas administrativas
   // Redireciona imediatamente para a tela de redefinição
-  if (isPasswordRecovery) {
+  if (
+    isPasswordRecovery ||
+    passwordRecoveryStorage.isPending() ||
+    passwordRecoveryStorage.hasRecoveryUrlParams()
+  ) {
     return <Navigate to="/redefinir-senha" replace />
   }
 
@@ -37,11 +52,20 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-// Guard da tela de login: se houver recuperação de senha pendente, impede login e força /redefinir-senha
+// Guard da tela de login: se houver convite ou recuperação pendente, impede login e redireciona
 function LoginRouteGuard() {
-  const { isPasswordRecovery, isAuthenticated, isLoading } = useAuth()
+  const { isPasswordRecovery, isFirstAccess, isAuthenticated, isLoading } = useAuth()
 
-  // Se houver sinal imediato na URL (hash/search) ou storage de recovery, não esperar: vai direto para /redefinir-senha
+  // Se houver sinal imediato de convite (hash/search) ou storage de primeiro acesso, vai para /primeiro-acesso
+  if (
+    isFirstAccess ||
+    inviteSessionStorage.isPending() ||
+    inviteSessionStorage.hasInviteUrlParams()
+  ) {
+    return <Navigate to="/primeiro-acesso" replace />
+  }
+
+  // Se houver sinal imediato na URL (hash/search) ou storage de recovery, vai direto para /redefinir-senha
   if (
     isPasswordRecovery ||
     passwordRecoveryStorage.isPending() ||
@@ -65,9 +89,17 @@ function LoginRouteGuard() {
   return <LoginPage />
 }
 
-// Raiz: se for recuperação vai para /redefinir-senha, se autenticado vai para /usuarios, senão /login
+// Raiz: se convite -> /primeiro-acesso, se recuperação -> /redefinir-senha, se autenticado -> /usuarios, senão -> /login
 function RootRedirect() {
-  const { isAuthenticated, isPasswordRecovery, isLoading } = useAuth()
+  const { isAuthenticated, isPasswordRecovery, isFirstAccess, isLoading } = useAuth()
+
+  if (
+    isFirstAccess ||
+    inviteSessionStorage.isPending() ||
+    inviteSessionStorage.hasInviteUrlParams()
+  ) {
+    return <Navigate to="/primeiro-acesso" replace />
+  }
 
   if (
     isPasswordRecovery ||
@@ -101,6 +133,9 @@ const App = () => (
 
             {/* Tela de Login protegida contra fluxo de recovery */}
             <Route path="/login" element={<LoginRouteGuard />} />
+
+            {/* Tela pública dedicada de Primeiro Acesso (link de convite inviteUserByEmail do Supabase Auth) */}
+            <Route path="/primeiro-acesso" element={<PrimeiroAcessoPage />} />
 
             {/* Tela dedicada de Redefinição de Senha (link de recuperação do Supabase Auth) */}
             <Route path="/redefinir-senha" element={<RedefinirSenhaPage />} />
