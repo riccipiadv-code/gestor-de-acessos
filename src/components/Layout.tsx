@@ -117,6 +117,7 @@ export default function Layout() {
         </div>
         <div className="flex items-center gap-3 text-[11px] text-slate-400">
           <span>Ferramenta Administrativa Corporativa</span>
+          <span>v1.0.2</span>
         </div>
       </footer>
     </div>
